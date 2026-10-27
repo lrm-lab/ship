@@ -14,7 +14,7 @@
     "format:check": "oxfmt --check .",
     "lint": "oxlint .",
     "typecheck": "tsc --noEmit",
-    "check": "bun run format:check && bun run lint && bun run typecheck",
+    "check": "bun run format:check && bun run lint && bun run lint:actions && bun run typecheck",
     "build": "bun build ./src/server.ts --target bun --outdir dist",
     "db:generate": "bunx --bun prisma generate",
     "db:validate": "bunx --bun prisma validate",
@@ -22,7 +22,8 @@
     "db:migrate:deploy": "bunx --bun prisma migrate deploy",
     "pretest": "bun run db:generate",
     "precheck": "bun run db:generate",
-    "prebuild": "bun run db:generate"
+    "prebuild": "bun run db:generate",
+    "lint:actions": "mise exec -- actionlint"
   },
   "dependencies": {
     "@prisma/adapter-pg": "7.10.0",

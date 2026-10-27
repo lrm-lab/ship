@@ -1,5 +1,6 @@
 [tools]
 bun = "1.4.4"
+actionlint = "1.7.12"
 
 [tasks.test]
 description = "Run the tests"
