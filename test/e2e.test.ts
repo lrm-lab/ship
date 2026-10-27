@@ -367,4 +367,9 @@ describe("Ship end to end", () => {
     );
     expect(forged.status).toBe(401);
   });
+
+  test("on SIGTERM the server drains, closes its database pool and exits 0", async () => {
+    child?.kill("SIGTERM");
+    expect(await child?.exited).toBe(0);
+  });
 });
