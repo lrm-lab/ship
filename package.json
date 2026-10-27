@@ -15,9 +15,18 @@
     "lint": "oxlint .",
     "typecheck": "tsc --noEmit",
     "check": "bun run format:check && bun run lint && bun run typecheck",
-    "build": "bun build ./src/server.ts --target bun --outdir dist"
+    "build": "bun build ./src/server.ts --target bun --outdir dist",
+    "db:generate": "bunx --bun prisma generate",
+    "db:validate": "bunx --bun prisma validate",
+    "db:migrate:dev": "bunx --bun prisma migrate dev",
+    "db:migrate:deploy": "bunx --bun prisma migrate deploy",
+    "pretest": "bun run db:generate",
+    "precheck": "bun run db:generate",
+    "prebuild": "bun run db:generate"
   },
   "dependencies": {
+    "@prisma/adapter-pg": "7.10.0",
+    "@prisma/client": "7.10.0",
     "hono": "4.13.14",
     "jose": "6.2.13"
   },
@@ -27,6 +36,7 @@
     "ajv-formats": "3.0.1",
     "oxfmt": "0.65.0",
     "oxlint": "1.80.0",
+    "prisma": "7.10.0",
     "typescript": "7.0.2"
   }
 }

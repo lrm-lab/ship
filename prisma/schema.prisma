@@ -1,0 +1,69 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// One Workspace of one CoForge deployment: the owner of everything Ship stores. Created on the
+/// first authenticated call from that Workspace.
+model Org {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  /// The CoForge issuer URL, as listed in SHIP_TRUSTED_ISSUERS.
+  issuer      String
+  /// The Workspace id claim of the Agent token, unique only within its issuer.
+  workspaceId String   @map("workspace_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  releases Release[]
+
+  @@unique([issuer, workspaceId])
+  @@map("orgs")
+}
+
+enum ReleaseChannel {
+  dev
+  stable
+
+  @@map("release_channel")
+}
+
+/// One version of one app. Its notes, one per locale, are in ReleaseNote.
+model Release {
+  id                 String         @id @default(uuid(7)) @db.Uuid
+  orgId              String         @map("org_id") @db.Uuid
+  app                String
+  /// A SemVer 2.0.0 version string, stored as the Agent sent it.
+  version            String
+  /// dev when the version has a prerelease part, else stable.
+  channel            ReleaseChannel
+  createdByAgentId   String         @map("created_by_agent_id")
+  updatedByAgentId   String         @map("updated_by_agent_id")
+  createdAt          DateTime       @default(now()) @map("created_at")
+  updatedAt          DateTime       @updatedAt @map("updated_at")
+
+  org   Org           @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  notes ReleaseNote[]
+
+  @@unique([orgId, app, version])
+  @@map("releases")
+}
+
+/// The Markdown release notes of a Release in one locale.
+model ReleaseNote {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  releaseId String   @map("release_id") @db.Uuid
+  /// A BCP 47 style tag such as en or zh-CN.
+  locale    String
+  body      String
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  release Release @relation(fields: [releaseId], references: [id], onDelete: Cascade)
+
+  @@unique([releaseId, locale])
+  @@map("release_notes")
+}
