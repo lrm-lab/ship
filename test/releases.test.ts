@@ -112,6 +112,19 @@ describe("releases.notes.put and releases.notes.get", () => {
     expect(other.orgId).not.toBe(put.orgId);
   });
 
+  test("locales come back in one fixed order, however they were sent", async () => {
+    await putNotes("order", "1.0.0", { "zh-CN": "z", fr: "f", en: "e", de: "d" });
+    const got = await (await getNotes("order", "1.0.0")).json();
+    expect(Object.keys(got.notes)).toEqual(["de", "en", "fr", "zh-CN"]);
+    const listed = await (await call("/api/apps/order/releases")).json();
+    expect(listed.releases[0].locales).toEqual(["de", "en", "fr", "zh-CN"]);
+    // the put response too, and a second put in another order changes nothing
+    const again = await (
+      await putNotes("order", "1.0.0", { fr: "f", "zh-CN": "z", de: "d", en: "e" })
+    ).json();
+    expect(Object.keys(again.notes)).toEqual(["de", "en", "fr", "zh-CN"]);
+  });
+
   test("a version without a prerelease part is on the stable channel", async () => {
     const res = await putNotes("chan", "1.2.3+build.5", { en: "x" });
     expect((await res.json()).channel).toBe("stable");

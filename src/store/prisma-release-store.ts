@@ -11,8 +11,12 @@ import type {
 const isUniqueViolation = (error: unknown) =>
   error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
 
-function toNotes(rows: { locale: string; body: string }[]): ReleaseNotes {
-  return Object.fromEntries(rows.map((row) => [row.locale, row.body]));
+/**
+ * Notes as an object whose keys are in one fixed order: UTF-16 code unit order of the locale, so
+ * the order does not depend on how they were sent or stored, nor on the database's collation.
+ */
+function sortedNotes(entries: Iterable<readonly [string, string]>): ReleaseNotes {
+  return Object.fromEntries([...entries].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
 }
 
 export function createPrismaReleaseStore(db: PrismaClient): ReleaseStore {
@@ -26,6 +30,7 @@ export function createPrismaReleaseStore(db: PrismaClient): ReleaseStore {
 
   const writeNotes = ({ orgId, app, version, channel, agentId, notes }: PutNotesInput) =>
     db.$transaction(async (tx) => {
+      const sorted = sortedNotes(Object.entries(notes));
       // Upserting the release first takes its row lock, so concurrent puts of one version
       // are applied one after the other, each replacing the whole set.
       const release = await tx.release.upsert({
@@ -43,13 +48,13 @@ export function createPrismaReleaseStore(db: PrismaClient): ReleaseStore {
       });
       await tx.releaseNote.deleteMany({ where: { releaseId: release.id } });
       await tx.releaseNote.createMany({
-        data: Object.entries(notes).map(([locale, body]) => ({
+        data: Object.entries(sorted).map(([locale, body]) => ({
           releaseId: release.id,
           locale,
           body,
         })),
       });
-      return { app, version, channel, notes, updatedAt: release.updatedAt };
+      return { app, version, channel, notes: sorted, updatedAt: release.updatedAt };
     });
 
   const store: ReleaseStore = {
@@ -102,7 +107,7 @@ export function createPrismaReleaseStore(db: PrismaClient): ReleaseStore {
         app: release.app,
         version: release.version,
         channel: release.channel,
-        notes: toNotes(release.notes),
+        notes: sortedNotes(release.notes.map((row) => [row.locale, row.body])),
         updatedAt: release.updatedAt,
       };
     },
