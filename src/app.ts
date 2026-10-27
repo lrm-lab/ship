@@ -17,9 +17,9 @@ import type { ReleaseStore } from "./store/release-store";
 import { coerceQuery, validate } from "./validate";
 
 const REALM = "ship";
-// The largest valid notes (20 locales of 16000 characters, CJK at 3 bytes each) are about 1 MB; 1 MiB is also the
-// Agent CLI's own cap on a request body.
-const MAX_BODY_BYTES = 1024 * 1024;
+// The largest valid notes are 20 locales of 16000 characters; a client may send each as a 6-byte
+// \uXXXX escape, so about 1.9 MB. The cap leaves room for that.
+const MAX_BODY_BYTES = 2 * 1024 * 1024;
 
 /** The caller, and the org the pipeline resolved for it: null for a read by a Workspace with no org yet. */
 export type HandlerContext = Caller & { orgId: string | null };

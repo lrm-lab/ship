@@ -214,6 +214,26 @@ describe("releases.notes.put and releases.notes.get", () => {
       ).toBe(true);
     });
 
+    test("accepts the largest allowed notes even as a body of \\uXXXX and \\n escapes (6 bytes a character)", async () => {
+      const locales = Array.from({ length: 20 }, (_, i) => `d${String.fromCharCode(97 + i)}`);
+      const notes = Object.fromEntries(locales.map((l) => [l, "重".repeat(16000)]));
+      // JSON.stringify keeps 重 as one character; escape it the way another client may send it
+      const body = JSON.stringify({ notes }).replace(
+        /[^\x00-\x7f]/g,
+        (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
+      );
+      expect(body.length).toBeGreaterThan(1024 * 1024);
+      const res = await app.request(`${BASE}${notesPath("escaped", "1.0.0")}`, {
+        method: "PUT",
+        headers: {
+          authorization: `Bearer ${await bearerFor()}`,
+          "content-type": "application/json",
+        },
+        body,
+      });
+      expect(res.status).toBe(200);
+    });
+
     test("accepts locale tags with a script or region", async () => {
       const res = await putNotes("locales", "1.0.0", {
         en: "a",
