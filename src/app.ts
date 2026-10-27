@@ -60,9 +60,10 @@ export function createApp(
       throw new Error(`No handler for action ${action.name}`);
   }
 
+  const manifest = buildManifest(config, actions);
   app.get(MANIFEST_PATH, (c) => {
     c.header("Cache-Control", "public, max-age=300");
-    return c.json(buildManifest(config, actions));
+    return c.json(manifest);
   });
   app.get("/healthz", (c) => c.json({ ok: true }));
   registerPublicRoutes(app, store);

@@ -27,9 +27,8 @@ function requireSecureUrl(name: string, value: string): URL {
   return url;
 }
 
-function parseTrustedIssuers(raw: string | undefined): TrustedIssuer[] {
+function parseTrustedIssuers(raw: string): TrustedIssuer[] {
   const name = "SHIP_TRUSTED_ISSUERS";
-  if (!raw?.trim()) throw new Error(`Missing environment variable ${name} (see .env.example)`);
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -62,7 +61,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     if (!value) throw new Error(`Missing environment variable ${name} (see .env.example)`);
     return value;
   };
-  const trustedIssuers = parseTrustedIssuers(env.SHIP_TRUSTED_ISSUERS);
+  const trustedIssuers = parseTrustedIssuers(need("SHIP_TRUSTED_ISSUERS"));
   const appOrigin = need("APP_ORIGIN");
   const databaseUrl = need("DATABASE_URL");
   if (requireSecureUrl("APP_ORIGIN", appOrigin).pathname !== "/") {
