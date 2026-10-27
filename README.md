@@ -34,7 +34,7 @@ No action needs a scope beyond the fixed `openid profile identity` (`required_sc
 text order.
 
 Errors are JSON `{ error, message }`: 400 `invalid_input` (with `problems`), 401 `unauthorized` or
-`invalid_token`, 403 `insufficient_scope`, 404 `not_found`, 413 `payload_too_large`.
+`invalid_token`, 403 `insufficient_scope`, 404 `not_found`, 413 `payload_too_large` (a body over 1 MiB).
 
 ### Data is scoped by org
 

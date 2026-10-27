@@ -19,7 +19,9 @@ import type { ReleaseStore } from "./store/release-store";
 import { coerceQuery, validate } from "./validate";
 
 const REALM = "ship";
-const MAX_BODY_BYTES = 64 * 1024;
+// The largest valid notes (20 locales of 16000 characters, CJK at 3 bytes each) are about 1 MB; 1 MiB is also the
+// Agent CLI's own cap on a request body.
+const MAX_BODY_BYTES = 1024 * 1024;
 
 export type AppDeps = {
   /** Key sets by issuer, replacing the remote `<issuer>/jwks` ones (tests). */

@@ -350,7 +350,7 @@ describe("hosted HTTP action service", () => {
         actions: [{ ...base, name: "slow.run" }],
         handlers: { "slow.run": () => ({ status: 201, body: {} }) },
       });
-      const big = JSON.stringify({ n: 1, pad: "x".repeat(70 * 1024) });
+      const big = JSON.stringify({ n: 1, pad: "x".repeat(1100 * 1024) });
       expect((await post(a, JSON.parse(big), "big")).status).toBe(413);
       const chunked = new ReadableStream({
         start(controller) {

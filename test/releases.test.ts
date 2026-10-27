@@ -167,6 +167,20 @@ describe("releases.notes.put and releases.notes.get", () => {
       expect((await putNotes("limits", "1.0.1", twenty)).status).toBe(200);
     });
 
+    test("accepts the largest allowed notes: 20 locales of 16000 characters, in ASCII or CJK", async () => {
+      const locales = Array.from({ length: 20 }, (_, i) => `c${String.fromCharCode(97 + i)}`);
+      const ascii = Object.fromEntries(
+        locales.map((l) => [l, "line of text\n".repeat(1230).slice(0, 16000)]),
+      );
+      const cjk = Object.fromEntries(locales.map((l) => [l, "重".repeat(16000)]));
+      expect((await putNotes("biggest", "1.0.0", ascii)).status).toBe(200);
+      const res = await putNotes("biggest", "1.0.1", cjk);
+      expect(res.status).toBe(200);
+      expect(
+        Object.values((await res.json()).notes).every((text) => (text as string).length === 16000),
+      ).toBe(true);
+    });
+
     test("accepts locale tags with a script or region", async () => {
       const res = await putNotes("locales", "1.0.0", {
         en: "a",
