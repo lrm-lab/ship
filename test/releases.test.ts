@@ -219,7 +219,7 @@ describe("releases.notes.put and releases.notes.get", () => {
       const notes = Object.fromEntries(locales.map((l) => [l, "重".repeat(16000)]));
       // JSON.stringify keeps 重 as one character; escape it the way another client may send it
       const body = JSON.stringify({ notes }).replace(
-        /[^\x00-\x7f]/g,
+        /\P{ASCII}/gu,
         (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
       );
       expect(body.length).toBeGreaterThan(1024 * 1024);
