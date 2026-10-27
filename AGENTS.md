@@ -16,6 +16,14 @@ Ship is a CoForge App (README.md): Hono on Bun, Prisma and PostgreSQL, JSON over
   is generated into `src/generated/` (git-ignored) by `bun run db:generate`, which `test`, `check` and
   `build` run first; a bare `bun test` needs it already generated.
 
+## Image and CI
+
+- Pin every external reference: the `Dockerfile` base image by tag and digest, workflow actions by commit SHA
+  (version in a comment), mise by version. Keep CI to test, check, build and the image smoke test
+  (`scripts/smoke-image.sh`); nothing is pushed or published from it.
+- Migrations run as a one-shot `bunx --bun prisma migrate deploy` from the same image, before the server starts.
+  Workflows are linted by `actionlint` inside `mise run check`.
+
 ## Code layout
 
 - Imports inside the package use the `#src/` alias (`#src/store/database`), siblings use `./`; never write

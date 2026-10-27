@@ -90,6 +90,30 @@ coforge app invoke <app-key> releases.notes.get --param app=coforge-computer --p
 coforge app invoke <app-key> releases.list --param app=coforge-computer --param channel=dev
 ```
 
+## Container image
+
+The `Dockerfile` builds the server into `dist/server.js` on the official `oven/bun` Alpine image and ships it
+with the Prisma CLI, the schema and the migrations. It runs as the non-root `bun` user and listens on 3000.
+
+```bash
+docker build --tag ship .
+# Apply the migrations: a one-shot run of the same image, before the first start and after every upgrade.
+docker run --rm --env DATABASE_URL ship bunx --bun prisma migrate deploy
+docker run -d --publish 3000:3000 --env DATABASE_URL --env APP_ORIGIN --env SHIP_TRUSTED_ISSUERS ship
+```
+
+The container needs `DATABASE_URL`, `APP_ORIGIN` and `SHIP_TRUSTED_ISSUERS` (see Environment variables);
+`HOST` defaults to `0.0.0.0` and `PORT` to 3000. `GET /healthz` is the liveness probe and `SIGTERM` stops it
+gracefully. `scripts/smoke-image.sh <image>` migrates, starts and probes an image against a disposable
+PostgreSQL.
+
+## CI
+
+`.github/workflows/ci.yml` runs on pull requests and on pushes to `main`. The `verify` job runs
+`bun install --frozen-lockfile`, `mise run test`, `mise run check` (which includes `actionlint` on the
+workflows) and `mise run build`; the `image` job builds the image and runs the smoke test. Nothing is pushed
+or published.
+
 ## Develop and test
 
 Tools come from `mise.toml` (Bun 1.4.4); Docker is needed for the tests.
@@ -98,7 +122,7 @@ Tools come from `mise.toml` (Bun 1.4.4); Docker is needed for the tests.
 mise install
 bun install
 mise run test      # bun test; generates the Prisma client first
-mise run check     # oxfmt --check, oxlint, tsc --noEmit
+mise run check     # oxfmt --check, oxlint, actionlint, tsc --noEmit
 mise run build     # bun build ./src/server.ts --target bun --outdir dist
 bun run start      # needs .env and a migrated database: bun run db:migrate:deploy
 ```
