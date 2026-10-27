@@ -291,3 +291,83 @@ describe("releases.list", () => {
     expect((await list("shared-name", "", { workspace: "w-other" })).body.releases).toHaveLength(1);
   });
 });
+
+describe("public read: GET /public/v1/orgs/{orgId}/apps/{app}/releases/{version}", () => {
+  /** The org id a Workspace got, found through the store the app uses. */
+  const orgIdOf = (issuer: TestIssuer, workspaceId: string) =>
+    createPrismaReleaseStore(database.client).ensureOrg({ issuer: issuer.issuer, workspaceId });
+  const publicGet = (orgId: string, appName: string, version: string) =>
+    app.request(
+      `${BASE}/public/v1/orgs/${orgId}/apps/${appName}/releases/${encodeURIComponent(version)}`,
+    );
+
+  test("serves the notes without a token, with cache-control: no-cache", async () => {
+    await putNotes(
+      "public-demo",
+      "2.1.0-dev.3",
+      { en: "Hello", "zh-CN": "你好" },
+      { workspace: "w-pub" },
+    );
+    const orgId = await orgIdOf(issuerA, "w-pub");
+    const res = await publicGet(orgId, "public-demo", "2.1.0-dev.3");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("no-cache");
+    expect(await res.json()).toEqual({
+      app: "public-demo",
+      version: "2.1.0-dev.3",
+      channel: "dev",
+      notes: { en: "Hello", "zh-CN": "你好" },
+      updatedAt: expect.any(String),
+    });
+  });
+
+  test("shows the same body as releases.notes.get and follows an overwrite", async () => {
+    await putNotes("public-same", "1.0.0", { en: "a", fr: "b" }, { workspace: "w-pub" });
+    const orgId = await orgIdOf(issuerA, "w-pub");
+    const viaAction = await (await getNotes("public-same", "1.0.0", { workspace: "w-pub" })).json();
+    expect(await (await publicGet(orgId, "public-same", "1.0.0")).json()).toEqual(viaAction);
+    await putNotes("public-same", "1.0.0", { en: "c" }, { workspace: "w-pub" });
+    expect((await (await publicGet(orgId, "public-same", "1.0.0")).json()).notes).toEqual({
+      en: "c",
+    });
+  });
+
+  test("404 not_found for an unknown release, another org's id, or any malformed part", async () => {
+    await putNotes("public-404", "1.0.0", { en: "x" }, { workspace: "w-pub" });
+    const orgId = await orgIdOf(issuerA, "w-pub");
+    const otherOrg = await orgIdOf(issuerB, "w-pub");
+    const urls = [
+      [orgId, "public-404", "9.9.9"],
+      [orgId, "no-such-app", "1.0.0"],
+      [otherOrg, "public-404", "1.0.0"],
+      ["0199a8c0-0000-7000-8000-000000000000", "public-404", "1.0.0"],
+      ["not-a-uuid", "public-404", "1.0.0"],
+      [orgId, "Bad_App", "1.0.0"],
+      [orgId, "public-404", "1.0"],
+      [orgId, "public-404", "v1.0.0"],
+    ] as const;
+    const bodies = [];
+    for (const [o, a, v] of urls) {
+      const res = await publicGet(o, a, v);
+      expect(res.status).toBe(404);
+      expect(res.headers.get("cache-control")).toBe("no-cache");
+      bodies.push(await res.json());
+    }
+    // the answer does not say which part was wrong
+    expect(new Set(bodies.map((b) => JSON.stringify(b))).size).toBe(1);
+    expect(bodies[0].error).toBe("not_found");
+  });
+
+  test("is not part of the manifest and ignores an Authorization header", async () => {
+    const manifest = await (
+      await app.request(`${BASE}/.well-known/coforge-agent-manifest.json`)
+    ).json();
+    expect(JSON.stringify(manifest)).not.toContain("/public/");
+    const orgId = await orgIdOf(issuerA, "w-pub");
+    const res = await app.request(
+      `${BASE}/public/v1/orgs/${orgId}/apps/public-same/releases/1.0.0`,
+      { headers: { authorization: "Bearer garbage" } },
+    );
+    expect(res.status).toBe(200);
+  });
+});

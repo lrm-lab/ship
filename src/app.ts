@@ -13,6 +13,7 @@ import {
   buildManifest,
   type Action,
 } from "./manifest";
+import { registerPublicRoutes } from "./public-routes";
 import { createReleaseHandlers } from "./releases";
 import type { ReleaseStore } from "./store/release-store";
 import { coerceQuery, validate } from "./validate";
@@ -53,6 +54,7 @@ export function createApp(
     return c.json({ ...buildManifest(config), actions });
   });
   app.get("/healthz", (c) => c.json({ ok: true }));
+  if (store) registerPublicRoutes(app, store);
 
   const challenge = (error: string, extra = "") =>
     `Bearer realm="${REALM}", error="${error}"${extra}`;
