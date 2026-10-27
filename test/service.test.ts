@@ -3,7 +3,8 @@ import type { Hono } from "hono";
 import { generateKeyPair } from "jose";
 import { createApp } from "#src/app";
 import { loadConfig } from "#src/config";
-import { type Action } from "#src/manifest";
+import { buildManifest, type Action } from "#src/manifest";
+import type { ReleaseStore } from "#src/store/release-store";
 import {
   createTestIssuer,
   signAgentToken,
@@ -22,6 +23,46 @@ let config: ReturnType<typeof loadConfig>;
 /** An Agent access token of issuer A unless `issuer` says otherwise. */
 const token = (overrides: AgentTokenOptions = {}, issuer = issuerA) =>
   signAgentToken(issuer, overrides);
+
+/** Stand-ins for the release actions, so this file tests the generic machinery on its own. */
+const whoami: Action = {
+  name: "test.whoami",
+  effect: "read",
+  idempotency: "safe",
+  endpoint: { method: "GET", path: "/whoami" },
+  required_scopes: [],
+  input_schema: { type: "object", properties: {}, additionalProperties: false },
+};
+const echo: Action = {
+  name: "test.echo",
+  effect: "create",
+  idempotency: "key_required",
+  idempotency_header: "Idempotency-Key",
+  endpoint: { method: "POST", path: "/echo" },
+  required_scopes: [],
+  input_schema: {
+    type: "object",
+    properties: {
+      title: { type: "string", minLength: 1, maxLength: 200 },
+      body: { type: "string", maxLength: 5000 },
+    },
+    required: ["title"],
+    additionalProperties: false,
+  },
+};
+const testHandlers = {
+  "test.whoami": (
+    _input: unknown,
+    caller: { issuer: string; workspaceId: string; agentId: string },
+  ) => ({
+    status: 200 as const,
+    body: { issuer: caller.issuer, workspaceId: caller.workspaceId, agentId: caller.agentId },
+  }),
+  "test.echo": ({ title, body = "" }: { title: string; body?: string }) => ({
+    status: 201 as const,
+    body: { id: crypto.randomUUID(), title, body },
+  }),
+};
 
 const keysByIssuer = () => ({ [issuerA.issuer]: issuerA.keySet, [issuerB.issuer]: issuerB.keySet });
 
@@ -58,21 +99,26 @@ describe("hosted HTTP action service", () => {
       APP_ORIGIN: BASE,
       DATABASE_URL: "postgresql://unused@localhost:5432/unused",
     });
-    app = createApp(config, { keys: keysByIssuer() });
+    app = createApp(config, {
+      keys: keysByIssuer(),
+      actions: [whoami, echo],
+      handlers: testHandlers,
+    });
   });
 
   test("publishes the manifest without authentication", async () => {
-    const res = await call("/.well-known/coforge-agent-manifest.json");
+    const withReleases = createApp(config, { keys: keysByIssuer(), store: {} as ReleaseStore });
+    const res = await withReleases.request(`${BASE}/.well-known/coforge-agent-manifest.json`);
     expect(res.status).toBe(200);
     const manifest = await res.json();
-    expect(manifest.schema).toBe("coforge-agent-manifest.v1");
+    expect(manifest).toEqual(JSON.parse(JSON.stringify(buildManifest(config))));
     expect(manifest.execution.base_url).toBe(`${BASE}/api`);
     expect(manifest.name).toBe("Ship");
   });
 
   describe("access token verification", () => {
     test("no token: 401 with a bare challenge", async () => {
-      const res = await call("/api/notes/x");
+      const res = await call("/api/whoami");
       expect(res.status).toBe(401);
       expect(res.headers.get("www-authenticate")).toMatch(/^Bearer realm=/);
     });
@@ -93,7 +139,7 @@ describe("hosted HTTP action service", () => {
       ],
     ] as [string, () => Promise<string>][]) {
       test(`rejects a token that is ${name}`, async () => {
-        const res = await call("/api/notes/x", { bearer: await make() });
+        const res = await call("/api/whoami", { bearer: await make() });
         expect(res.status).toBe(401);
         expect(res.headers.get("www-authenticate")).toMatch(/error="invalid_token"/);
       });
@@ -101,15 +147,15 @@ describe("hosted HTTP action service", () => {
 
     test("accepts a valid token from each trusted issuer", async () => {
       for (const issuer of [issuerA, issuerB]) {
-        const res = await call("/api/notes/x", { bearer: await token({}, issuer) });
-        expect(res.status).toBe(404); // authenticated; there is no such note
-        expect((await res.json()).error).toBe("not_found");
+        const res = await call("/api/whoami", { bearer: await token({}, issuer) });
+        expect(res.status).toBe(200);
+        expect((await res.json()).issuer).toBe(issuer.issuer);
       }
     });
 
     test("rejects tokens that are not decodable JWTs", async () => {
       for (const bearer of ["abc", "a.b.c", "x".repeat(50)]) {
-        const res = await call("/api/notes/x", { bearer });
+        const res = await call("/api/whoami", { bearer });
         expect(res.status).toBe(401);
         expect(res.headers.get("www-authenticate")).toMatch(/error="invalid_token"/);
       }
@@ -127,7 +173,7 @@ describe("hosted HTTP action service", () => {
         exp: 9999999999,
       };
       const forged = `${b64({ alg: "none", typ: "at+jwt" })}.${b64(claims)}.`;
-      expect((await call("/api/notes/x", { bearer: forged })).status).toBe(401);
+      expect((await call("/api/whoami", { bearer: forged })).status).toBe(401);
     });
   });
 
@@ -159,11 +205,11 @@ describe("hosted HTTP action service", () => {
     const bearer = await token();
     const headers = { "idempotency-key": "k-invalid" };
     for (const body of [{}, { title: "" }, { title: "ok", extra: 1 }, { title: 5 }]) {
-      const res = await call("/api/notes", { method: "POST", bearer, body, headers });
+      const res = await call("/api/echo", { method: "POST", bearer, body, headers });
       expect(res.status).toBe(400);
       expect((await res.json()).error).toBe("invalid_input");
     }
-    const notJson = await app.request(`${BASE}/api/notes`, {
+    const notJson = await app.request(`${BASE}/api/echo`, {
       method: "POST",
       headers: {
         authorization: `Bearer ${bearer}`,
@@ -176,7 +222,7 @@ describe("hosted HTTP action service", () => {
   });
 
   test("requires the idempotency header on a key_required action", async () => {
-    const res = await call("/api/notes", {
+    const res = await call("/api/echo", {
       method: "POST",
       bearer: await token(),
       body: { title: "t" },
@@ -185,10 +231,10 @@ describe("hosted HTTP action service", () => {
     expect((await res.json()).error).toBe("idempotency_key_required");
   });
 
-  test("create, replay with the same key, conflict on different input, then read", async () => {
+  test("create, replay with the same key, conflict on different input", async () => {
     const bearer = await token();
     const headers = { "idempotency-key": "key-1" };
-    const first = await call("/api/notes", {
+    const first = await call("/api/echo", {
       method: "POST",
       bearer,
       body: { title: "Hello", body: "world" },
@@ -197,7 +243,7 @@ describe("hosted HTTP action service", () => {
     expect(first.status).toBe(201);
     const note = await first.json();
 
-    const replay = await call("/api/notes", {
+    const replay = await call("/api/echo", {
       method: "POST",
       bearer,
       body: { body: "world", title: "Hello" },
@@ -207,49 +253,28 @@ describe("hosted HTTP action service", () => {
     expect(replay.headers.get("idempotency-replayed")).toBe("true");
     expect(await replay.json()).toEqual(note);
 
-    const clash = await call("/api/notes", {
+    const clash = await call("/api/echo", {
       method: "POST",
       bearer,
       body: { title: "Different" },
       headers,
     });
     expect(clash.status).toBe(422);
-
-    const read = await call(`/api/notes/${note.id}`, { bearer });
-    expect(read.status).toBe(200);
-    expect(await read.json()).toEqual(note);
   });
 
-  test("notes are private to the same Workspace id under another issuer", async () => {
-    const created = await call("/api/notes", {
-      method: "POST",
-      bearer: await token(),
-      body: { title: "issuer A only" },
-      headers: { "idempotency-key": "iss-1" },
+  test("the caller is the issuer, Workspace and Agent of the token", async () => {
+    const res = await call("/api/whoami", {
+      bearer: await token({ sub: "agent-7", claims: { workspace_id: "w9" } }, issuerB),
     });
-    const { id } = await created.json();
-    const same = await call(`/api/notes/${id}`, { bearer: await token() });
-    expect(same.status).toBe(200);
-    const other = await call(`/api/notes/${id}`, { bearer: await token({}, issuerB) });
-    expect(other.status).toBe(404);
-  });
-
-  test("notes are private to a Workspace", async () => {
-    const created = await call("/api/notes", {
-      method: "POST",
-      bearer: await token(),
-      body: { title: "mine" },
-      headers: { "idempotency-key": "ws-1" },
+    expect(await res.json()).toEqual({
+      issuer: issuerB.issuer,
+      workspaceId: "w9",
+      agentId: "agent-7",
     });
-    const { id } = await created.json();
-    const other = await call(`/api/notes/${id}`, {
-      bearer: await token({ claims: { workspace_id: "w2" } }),
-    });
-    expect(other.status).toBe(404);
   });
 
   test("rejects an unknown query parameter on a GET", async () => {
-    const res = await call("/api/notes/abc?extra=1", { bearer: await token() });
+    const res = await call("/api/whoami?extra=1", { bearer: await token() });
     expect(res.status).toBe(400);
   });
 

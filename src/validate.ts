@@ -9,6 +9,7 @@ export type Schema = {
   maximum?: number;
   minLength?: number;
   maxLength?: number;
+  pattern?: string;
   minItems?: number;
   maxItems?: number;
   items?: Schema;
@@ -18,7 +19,7 @@ export type Schema = {
 /**
  * Validates `value` against the manifest schema subset this template uses
  * (type, properties, required, additionalProperties, enum, const, min/max,
- * minLength/maxLength, items, minItems/maxItems). CoForge's CLI checks input too,
+ * minLength/maxLength, pattern, items, minItems/maxItems). CoForge's CLI checks input too,
  * but the service must not trust its caller. Returns problem strings; [] means valid.
  */
 export function validate(schema: Schema, value: unknown, path = ""): string[] {
@@ -42,6 +43,8 @@ export function validate(schema: Schema, value: unknown, path = ""): string[] {
       problems.push(`${at} is shorter than ${schema.minLength}`);
     if (schema.maxLength !== undefined && value.length > schema.maxLength)
       problems.push(`${at} is longer than ${schema.maxLength}`);
+    if (schema.pattern !== undefined && !new RegExp(schema.pattern, "u").test(value))
+      problems.push(`${at} must match ${schema.pattern}`);
   }
   if (typeof value === "number") {
     if (schema.minimum !== undefined && value < schema.minimum)

@@ -51,7 +51,12 @@ test("actions are coherent", () => {
   }
 });
 
-test("a GET and a key_required action are both present", () => {
-  expect(actions.some((a) => a.endpoint.method === "GET" && a.idempotency === "safe")).toBeTruthy();
-  expect(actions.some((a) => a.idempotency === "key_required")).toBeTruthy();
+test("Ship's actions are the three release actions, none needing a scope", () => {
+  expect(actions.map((a) => [a.name, a.endpoint.method, a.effect, a.idempotency])).toEqual([
+    ["releases.notes.put", "PUT", "update", "idempotent"],
+    ["releases.notes.get", "GET", "read", "safe"],
+    ["releases.list", "GET", "read", "safe"],
+  ]);
+  for (const a of actions) expect(a.required_scopes).toEqual([]);
+  expect(manifest.name).toBe("Ship");
 });

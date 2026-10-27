@@ -1,10 +1,10 @@
-import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { bodyLimit } from "hono/body-limit";
 import type { JWTVerifyGetKey } from "jose";
 import { createTokenVerifier, missingScopes, type Caller } from "./auth";
 import type { Config } from "./config";
+import type { HandlerResponse, Handlers } from "./handler";
 import { createIdempotencyStore } from "./idempotency";
 import {
   API_PREFIX,
@@ -13,43 +13,18 @@ import {
   buildManifest,
   type Action,
 } from "./manifest";
+import { createReleaseHandlers } from "./releases";
+import type { ReleaseStore } from "./store/release-store";
 import { coerceQuery, validate } from "./validate";
 
 const REALM = "ship";
 const MAX_BODY_BYTES = 64 * 1024;
 
-export type HandlerResponse = { status: ContentfulStatusCode; body: unknown };
-/** A handler receives validated input and the caller; it returns { status, body }. */
-export type Handler = (input: any, caller: Caller) => HandlerResponse | Promise<HandlerResponse>;
-export type Handlers = Record<string, Handler>;
-
-/**
- * What each manifest action does. Keyed by action name; createApp refuses to boot if the two
- * lists drift apart.
- */
-function createHandlers(): Handlers {
-  /** Notes live in memory, partitioned by Workspace: replace with your database. */
-  type Note = { id: string; title: string; body: string };
-  const notes = new Map<string, Map<string, Note>>();
-  const forWorkspace = (id: string) => notes.get(id) ?? notes.set(id, new Map()).get(id)!;
-  return {
-    "notes.get": ({ id }: { id: string }, caller) => {
-      const note = forWorkspace(`${caller.issuer}\n${caller.workspaceId}`).get(id);
-      return note
-        ? { status: 200, body: note }
-        : { status: 404, body: { error: "not_found", message: "No such note" } };
-    },
-    "notes.create": ({ title, body = "" }: { title: string; body?: string }, caller) => {
-      const note = { id: randomUUID(), title, body };
-      forWorkspace(`${caller.issuer}\n${caller.workspaceId}`).set(note.id, note);
-      return { status: 201, body: note };
-    },
-  };
-}
-
 export type AppDeps = {
   /** Key sets by issuer, replacing the remote `<issuer>/jwks` ones (tests). */
   keys?: Record<string, JWTVerifyGetKey>;
+  /** Where releases are kept. Required unless `handlers` replaces the release handlers. */
+  store?: ReleaseStore;
   actions?: Action[];
   handlers?: Handlers;
   idempotency?: ReturnType<typeof createIdempotencyStore>;
@@ -59,7 +34,8 @@ export function createApp(
   config: Config,
   {
     keys,
-    handlers = createHandlers(),
+    store,
+    handlers = store ? createReleaseHandlers(store) : {},
     idempotency = createIdempotencyStore(),
     actions = defaultActions,
   }: AppDeps = {},
