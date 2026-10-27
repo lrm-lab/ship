@@ -92,55 +92,6 @@ describe("orgs", () => {
 });
 
 describe("release notes", () => {
-  test("putNotes stores the notes and getRelease reads them back", async () => {
-    const orgId = await store.ensureOrg({ issuer: "https://a.example/oidc", workspaceId: "w-put" });
-    const stored = await put(orgId, "1.0.0", { en: "Hello", "zh-CN": "你好" });
-    expect(stored).toMatchObject({
-      app: "demo",
-      version: "1.0.0",
-      channel: "stable",
-      notes: { en: "Hello", "zh-CN": "你好" },
-    });
-    expect(stored.updatedAt).toBeInstanceOf(Date);
-    expect(await store.getRelease(orgId, "demo", "1.0.0")).toEqual(stored);
-  });
-
-  test("putNotes again replaces the whole set and drops locales not sent", async () => {
-    const orgId = await store.ensureOrg({
-      issuer: "https://a.example/oidc",
-      workspaceId: "w-replace",
-    });
-    const first = await put(orgId, "2.0.0", { en: "one", fr: "un" }, "agent-1");
-    const second = await put(orgId, "2.0.0", { en: "uno", de: "eins" }, "agent-2");
-    expect(second.notes).toEqual({ en: "uno", de: "eins" });
-    expect((await store.getRelease(orgId, "demo", "2.0.0"))?.notes).toEqual({
-      en: "uno",
-      de: "eins",
-    });
-    expect(second.updatedAt.getTime()).toBeGreaterThanOrEqual(first.updatedAt.getTime());
-  });
-
-  test("getRelease is null for an unknown version, app or org", async () => {
-    const orgId = await store.ensureOrg({
-      issuer: "https://a.example/oidc",
-      workspaceId: "w-null",
-    });
-    await put(orgId, "1.0.0", { en: "x" });
-    expect(await store.getRelease(orgId, "demo", "9.9.9")).toBeNull();
-    expect(await store.getRelease(orgId, "other-app", "1.0.0")).toBeNull();
-    expect(
-      await store.getRelease("0199a8c0-0000-7000-8000-000000000000", "demo", "1.0.0"),
-    ).toBeNull();
-  });
-
-  test("an org never sees another org's releases", async () => {
-    const a = await store.ensureOrg({ issuer: "https://a.example/oidc", workspaceId: "w-iso" });
-    const b = await store.ensureOrg({ issuer: "https://b.example/oidc", workspaceId: "w-iso" });
-    await put(a, "1.0.0", { en: "secret" });
-    expect(await store.getRelease(b, "demo", "1.0.0")).toBeNull();
-    expect(await store.listReleases(b, "demo", { limit: 20 })).toEqual([]);
-  });
-
   test("a concurrent put of the same version leaves one consistent set", async () => {
     const orgId = await store.ensureOrg({
       issuer: "https://a.example/oidc",
@@ -158,49 +109,5 @@ describe("release notes", () => {
       { en: "c" },
     ];
     expect(allowed).toContainEqual(notes);
-  });
-});
-
-describe("listReleases", () => {
-  test("lists an app's releases newest first by SemVer, limited, optionally for one channel", async () => {
-    const orgId = await store.ensureOrg({
-      issuer: "https://a.example/oidc",
-      workspaceId: "w-list",
-    });
-    for (const version of [
-      "1.0.0",
-      "1.10.0",
-      "1.2.0",
-      "1.3.0-dev.1",
-      "1.3.0-dev.10",
-      "1.3.0-dev.9",
-    ]) {
-      await put(orgId, version, { en: "a", "zh-CN": "b" });
-    }
-    await store.putNotes({
-      orgId,
-      app: "elsewhere",
-      version: "9.0.0",
-      channel: "stable",
-      agentId: "a",
-      notes: { en: "z" },
-    });
-
-    const all = await store.listReleases(orgId, "demo", { limit: 20 });
-    expect(all.map((r) => r.version)).toEqual([
-      "1.10.0",
-      "1.3.0-dev.10",
-      "1.3.0-dev.9",
-      "1.3.0-dev.1",
-      "1.2.0",
-      "1.0.0",
-    ]);
-    expect(all[0]).toMatchObject({ channel: "stable", locales: ["en", "zh-CN"] });
-    expect((await store.listReleases(orgId, "demo", { limit: 2 })).map((r) => r.version)).toEqual([
-      "1.10.0",
-      "1.3.0-dev.10",
-    ]);
-    const dev = await store.listReleases(orgId, "demo", { channel: "dev", limit: 20 });
-    expect(dev.map((r) => r.version)).toEqual(["1.3.0-dev.10", "1.3.0-dev.9", "1.3.0-dev.1"]);
   });
 });

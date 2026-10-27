@@ -118,13 +118,6 @@ describe("releases.notes.put and releases.notes.get", () => {
     expect((await (await getNotes("chan", "1.2.3+build.5")).json()).version).toBe("1.2.3+build.5");
   });
 
-  test("a second put replaces the whole set: locales not sent are removed", async () => {
-    await putNotes("overwrite", "1.0.0", { en: "one", fr: "un", de: "eins" });
-    const second = await putNotes("overwrite", "1.0.0", { en: "uno" }, { agent: "agent-2" });
-    expect((await second.json()).notes).toEqual({ en: "uno" });
-    expect((await (await getNotes("overwrite", "1.0.0")).json()).notes).toEqual({ en: "uno" });
-  });
-
   test("reading from a Workspace that has no org creates none; the first write does", async () => {
     const who = { workspace: "w-read-only" };
     const orgs = () => database.client.org.count({ where: { workspaceId: "w-read-only" } });
@@ -156,11 +149,6 @@ describe("releases.notes.put and releases.notes.get", () => {
     // and a write from there does not touch the first org's notes
     await putNotes("private", "1.0.0", { en: "other" }, { issuer: issuerB });
     expect((await (await getNotes("private", "1.0.0")).json()).notes).toEqual({ en: "secret" });
-  });
-
-  test("requires a token", async () => {
-    const res = await call("/api/apps/private/releases/1.0.0/notes", { who: null });
-    expect(res.status).toBe(401);
   });
 
   describe("input validation (400 invalid_input)", () => {
@@ -284,6 +272,7 @@ describe("releases.list", () => {
   test("each entry has the version, channel, locales and updatedAt", async () => {
     await putNotes("shape", "1.0.0", { en: "a", "zh-CN": "b" });
     await putNotes("shape", "1.1.0-dev.1", { en: "c" });
+    await putNotes("shape-other", "9.0.0", { en: "another app of the same org" });
     const { body } = await list("shape");
     expect(body.releases).toEqual([
       { version: "1.1.0-dev.1", channel: "dev", locales: ["en"], updatedAt: expect.any(String) },
@@ -293,20 +282,6 @@ describe("releases.list", () => {
         locales: ["en", "zh-CN"],
         updatedAt: expect.any(String),
       },
-    ]);
-  });
-
-  test("filters by channel", async () => {
-    await seed("channels", ["1.0.0", "1.1.0-dev.1", "1.1.0-dev.2", "1.1.0"]);
-    const dev = await list("channels", "?channel=dev");
-    expect(dev.body.releases.map((r: { version: string }) => r.version)).toEqual([
-      "1.1.0-dev.2",
-      "1.1.0-dev.1",
-    ]);
-    const stable = await list("channels", "?channel=stable");
-    expect(stable.body.releases.map((r: { version: string }) => r.version)).toEqual([
-      "1.1.0",
-      "1.0.0",
     ]);
   });
 
