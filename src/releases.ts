@@ -9,14 +9,14 @@ export function channelOf(version: string): ReleaseChannel {
   return (parseSemVer(version)?.prerelease.length ?? 0) > 0 ? "dev" : "stable";
 }
 
-/** The wire form of a stored release, as the public endpoint returns it. */
-export const releaseBody = ({ app, version, channel, notes, updatedAt }: StoredRelease) => ({
-  app,
-  version,
-  channel,
-  notes,
-  updatedAt: updatedAt.toISOString(),
+/** The wire form of a stored value: its `updatedAt` as an ISO string. The one place that does it. */
+const toWire = <T extends { updatedAt: Date }>(value: T) => ({
+  ...value,
+  updatedAt: value.updatedAt.toISOString(),
 });
+
+/** The wire form of a stored release, as the public endpoint returns it. */
+export const releaseBody = (release: StoredRelease) => toWire(release);
 
 /**
  * Trims each text and writes each locale in its canonical form (zh-cn becomes zh-CN), which the
@@ -114,10 +114,7 @@ export function createReleaseHandlers(
       return {
         status: 200,
         body: {
-          releases: releases.map((release) => ({
-            ...release,
-            updatedAt: release.updatedAt.toISOString(),
-          })),
+          releases: releases.map(toWire),
         },
       };
     },

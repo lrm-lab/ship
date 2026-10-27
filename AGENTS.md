@@ -30,7 +30,8 @@ Ship is a CoForge App (README.md): Hono on Bun, Prisma and PostgreSQL, JSON over
 - `src/store/`: the `ReleaseStore` interface and its Prisma implementation own every query; handlers depend
   on the interface only. Every query is scoped by `orgId` (issuer + Workspace id).
 - `src/auth.ts` verifies tokens against the issuer named in `SHIP_TRUSTED_ISSUERS`; `src/semver.ts` is the
-  SemVer 2.0.0 parser and comparator; `src/public-routes.ts` is the token-less public read.
+  SemVer 2.0.0 parser and comparator; `src/public-routes.ts` is the token-less public read;
+  `src/shutdown.ts` is the once-only, time-bounded graceful shutdown `server.ts` installs.
 - Keep one term per concept in code, API and docs: `app`, `version`, `channel`, `notes`, `locale`, `org`.
 - Use `Bun.serve`, `Bun.spawn` and `fetch`; `.oxlintrc.json` forbids `node:http`, `node:child_process` and
   similar. Do not add exemptions to lint, format or type checks.
