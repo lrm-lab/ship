@@ -64,6 +64,14 @@ const notesOutput = {
     channel,
     notes: { type: "object", additionalProperties: true },
     updatedAt: { type: "string" },
+    orgId: {
+      type: "string",
+      description: "The id of Ship's org for this Workspace, as used in publicUrl.",
+    },
+    publicUrl: {
+      type: "string",
+      description: "Where these notes are public, readable without a token.",
+    },
   },
 } as const;
 

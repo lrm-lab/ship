@@ -87,6 +87,28 @@ describe("releases.notes.put and releases.notes.get", () => {
     expect(await got.json()).toEqual(stored);
   });
 
+  test("put and get say where the notes are public: orgId and publicUrl", async () => {
+    const put = await (
+      await putNotes("where", "1.0.0+build.5", { en: "x" }, { workspace: "w-where" })
+    ).json();
+    expect(put.orgId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    expect(put.publicUrl).toBe(
+      `${BASE}/public/v1/orgs/${put.orgId}/apps/where/releases/${encodeURIComponent("1.0.0+build.5")}`,
+    );
+    const got = await (await getNotes("where", "1.0.0+build.5", { workspace: "w-where" })).json();
+    expect(got.orgId).toBe(put.orgId);
+    expect(got.publicUrl).toBe(put.publicUrl);
+    // the URL works, without a token
+    const publicRes = await app.request(put.publicUrl);
+    expect(publicRes.status).toBe(200);
+    expect((await publicRes.json()).notes).toEqual({ en: "x" });
+    // another Workspace gets its own org id
+    const other = await (
+      await putNotes("where", "1.0.0+build.5", { en: "y" }, { workspace: "w-where-2" })
+    ).json();
+    expect(other.orgId).not.toBe(put.orgId);
+  });
+
   test("a version without a prerelease part is on the stable channel", async () => {
     const res = await putNotes("chan", "1.2.3+build.5", { en: "x" });
     expect((await res.json()).channel).toBe("stable");
@@ -339,7 +361,10 @@ describe("public read: GET /public/v1/orgs/{orgId}/apps/{app}/releases/{version}
     await putNotes("public-same", "1.0.0", { en: "a", fr: "b" }, { workspace: "w-pub" });
     const orgId = await orgIdOf(issuerA, "w-pub");
     const viaAction = await (await getNotes("public-same", "1.0.0", { workspace: "w-pub" })).json();
-    expect(await (await publicGet(orgId, "public-same", "1.0.0")).json()).toEqual(viaAction);
+    const { orgId: actionOrgId, publicUrl, ...rest } = viaAction;
+    expect(actionOrgId).toBe(orgId);
+    expect(publicUrl).toContain(`/public/v1/orgs/${orgId}/`);
+    expect(await (await publicGet(orgId, "public-same", "1.0.0")).json()).toEqual(rest);
     await putNotes("public-same", "1.0.0", { en: "c" }, { workspace: "w-pub" });
     expect((await (await publicGet(orgId, "public-same", "1.0.0")).json()).notes).toEqual({
       en: "c",

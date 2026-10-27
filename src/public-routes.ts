@@ -1,6 +1,6 @@
 import type { Hono } from "hono";
 import { isAppName, isOrgId, isVersion } from "./release-input";
-import { releaseBody } from "./releases";
+import { releaseBody } from "./release-body";
 import type { ReleaseStore } from "./store/release-store";
 
 export const PUBLIC_RELEASE_PATH = "/public/v1/orgs/:orgId/apps/:app/releases/:version";

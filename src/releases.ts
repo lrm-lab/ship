@@ -1,6 +1,7 @@
 import type { Caller } from "./auth";
 import type { HandlerResponse, Handlers } from "./handler";
 import { LIST_DEFAULT_LIMIT } from "./manifest";
+import { publicReleaseUrl, releaseBody } from "./release-body";
 import { channelOf, isVersion, parseNotes } from "./release-input";
 import { compareSemVer, parseSemVer } from "./semver";
 import type { ReleaseChannel, ReleaseStore, StoredRelease } from "./store/release-store";
@@ -14,17 +15,15 @@ const notFound = (): HandlerResponse => ({
   body: { error: "not_found", message: "No such release" },
 });
 
-/** The wire form of a stored release, as the Agent actions and the public endpoint return it. */
-export const releaseBody = ({ app, version, channel, notes, updatedAt }: StoredRelease) => ({
-  app,
-  version,
-  channel,
-  notes,
-  updatedAt: updatedAt.toISOString(),
-});
-
 /** Handlers of the release actions in the manifest. Every query is scoped to the caller's org. */
-export function createReleaseHandlers(store: ReleaseStore): Handlers {
+export function createReleaseHandlers(store: ReleaseStore, appOrigin: string): Handlers {
+  /** What notes.put and notes.get return: the release plus where it is public. */
+  const withLocation = (orgId: string, release: StoredRelease) => ({
+    ...releaseBody(release),
+    orgId,
+    publicUrl: publicReleaseUrl(appOrigin, orgId, release.app, release.version),
+  });
+
   // The org of a Workspace is created by its first authenticated call.
   const orgOf = (caller: Caller) =>
     store.ensureOrg({ issuer: caller.issuer, workspaceId: caller.workspaceId });
@@ -37,21 +36,23 @@ export function createReleaseHandlers(store: ReleaseStore): Handlers {
       if (!isVersion(input.version)) return invalid("version must be a SemVer 2.0.0 version");
       const parsed = parseNotes(input.notes);
       if ("problems" in parsed) return invalid(...parsed.problems);
+      const orgId = await orgOf(caller);
       const release = await store.putNotes({
-        orgId: await orgOf(caller),
+        orgId,
         app: input.app,
         version: input.version,
         channel: channelOf(input.version),
         agentId: caller.agentId,
         notes: parsed.notes,
       });
-      return { status: 200, body: releaseBody(release) };
+      return { status: 200, body: withLocation(orgId, release) };
     },
 
     "releases.notes.get": async (input: { app: string; version: string }, caller) => {
       if (!isVersion(input.version)) return invalid("version must be a SemVer 2.0.0 version");
-      const release = await store.getRelease(await orgOf(caller), input.app, input.version);
-      return release ? { status: 200, body: releaseBody(release) } : notFound();
+      const orgId = await orgOf(caller);
+      const release = await store.getRelease(orgId, input.app, input.version);
+      return release ? { status: 200, body: withLocation(orgId, release) } : notFound();
     },
 
     "releases.list": async (

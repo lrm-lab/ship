@@ -38,7 +38,7 @@ export function createApp(
   {
     keys,
     store,
-    handlers = store ? createReleaseHandlers(store) : {},
+    handlers = store ? createReleaseHandlers(store, config.appOrigin) : {},
     idempotency = createIdempotencyStore(),
     actions = defaultActions,
   }: AppDeps = {},
