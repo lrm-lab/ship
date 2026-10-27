@@ -5,6 +5,8 @@ export type Config = {
   trustedIssuers: TrustedIssuer[];
   appOrigin: string;
   port: number;
+  /** The interface to listen on. */
+  host: string;
   databaseUrl: string;
 };
 
@@ -66,5 +68,11 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   if (requireSecureUrl("APP_ORIGIN", appOrigin).pathname !== "/") {
     throw new Error("APP_ORIGIN must be an origin, without a path");
   }
-  return { trustedIssuers, appOrigin, port: Number(env.PORT || 3000), databaseUrl };
+  return {
+    trustedIssuers,
+    appOrigin,
+    port: Number(env.PORT || 3000),
+    host: env.HOST?.trim() || "0.0.0.0",
+    databaseUrl,
+  };
 }

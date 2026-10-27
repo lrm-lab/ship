@@ -31,6 +31,12 @@ describe("loadConfig", () => {
     expect(config.databaseUrl).toBe(base.DATABASE_URL);
   });
 
+  test("listens on every interface unless HOST says otherwise", () => {
+    const trusted = issuers([{ issuer: "https://a.example/oidc", clientId: "x" }]);
+    expect(load(trusted).host).toBe("0.0.0.0");
+    expect(load(trusted, { HOST: "127.0.0.1" }).host).toBe("127.0.0.1");
+  });
+
   test("accepts http only for a loopback issuer", () => {
     expect(
       load(issuers([{ issuer: "http://127.0.0.1:9000", clientId: "ship" }])).trustedIssuers[0]
