@@ -48,6 +48,8 @@ let base = "";
 let issuerA: TestIssuer;
 let issuerB: TestIssuer;
 let untrusted: TestIssuer;
+let orgId = "";
+let publicUrl = "";
 let stderrText = Promise.resolve("");
 
 type Step = {
@@ -192,6 +194,13 @@ describe("Ship end to end", () => {
       },
     );
     expect(put.status).toBe(200);
+    // the response says where the notes are public; the public test below reads that location
+    orgId = put.body.orgId;
+    expect(orgId).toMatch(/^[0-9a-f-]{36}$/);
+    publicUrl = put.body.publicUrl;
+    expect(publicUrl).toBe(
+      `${base}/public/v1/orgs/${orgId}/apps/coforge-computer/releases/${encodeURIComponent("0.1.3-dev.4")}`,
+    );
     expect(put.body).toMatchObject({
       app: "coforge-computer",
       version: "0.1.3-dev.4",
@@ -288,15 +297,9 @@ describe("Ship end to end", () => {
   });
 
   test("anyone can read a release by org id at the public endpoint", async () => {
-    const [org] =
-      await sql`select id from orgs where issuer = ${issuerA.issuer} and workspace_id = 'w1'`;
-    expect(org?.id).toBeTruthy();
-    const res = await step(
-      "public read",
-      null,
-      "GET",
-      `/public/v1/orgs/${org.id}/apps/coforge-computer/releases/${encodeURIComponent("0.1.3-dev.4")}`,
-    );
+    const location = new URL(publicUrl);
+    expect(location.origin).toBe(base);
+    const res = await step("public read", null, "GET", location.pathname);
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("no-cache");
     expect(res.body).toMatchObject({
@@ -309,7 +312,7 @@ describe("Ship end to end", () => {
       "public read of an unknown version",
       null,
       "GET",
-      `/public/v1/orgs/${org.id}/apps/coforge-computer/releases/7.7.7`,
+      `/public/v1/orgs/${orgId}/apps/coforge-computer/releases/7.7.7`,
     );
     expect(unknown.status).toBe(404);
     const malformed = await step(

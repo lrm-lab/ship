@@ -22,11 +22,11 @@ No action needs a scope beyond the fixed `openid profile identity` (`required_sc
 
 ### Actions
 
-| Action               | Input                                                                                                                                                                                                     | Result                                                                                                                      |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `releases.notes.put` | `app`, `version`, `notes`: an object of locale to Markdown. 1 to 20 locales, a locale matches `^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$`, each text trimmed and 1 to 16000 characters (JavaScript string length). | 200 `{ app, version, channel, notes, updatedAt }`. Replaces the version's whole set of notes: locales not sent are removed. |
-| `releases.notes.get` | `app`, `version`                                                                                                                                                                                          | 200 as above, or 404 `not_found`.                                                                                           |
-| `releases.list`      | `app`, optional `channel` (`dev` or `stable`), `limit` (1 to 100, default 20)                                                                                                                             | 200 `{ releases: [{ version, channel, locales, updatedAt }] }`, newest first by SemVer precedence, not by time.             |
+| Action               | Input                                                                                                                                                                                                     | Result                                                                                                                                        |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `releases.notes.put` | `app`, `version`, `notes`: an object of locale to Markdown. 1 to 20 locales, a locale matches `^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$`, each text trimmed and 1 to 16000 characters (JavaScript string length). | 200 `{ app, version, channel, notes, updatedAt, orgId, publicUrl }`. Replaces the version's whole set of notes: locales not sent are removed. |
+| `releases.notes.get` | `app`, `version`                                                                                                                                                                                          | 200 as above (with `orgId` and `publicUrl`), or 404 `not_found`.                                                                              |
+| `releases.list`      | `app`, optional `channel` (`dev` or `stable`), `limit` (1 to 100, default 20)                                                                                                                             | 200 `{ releases: [{ version, channel, locales, updatedAt }] }`, newest first by SemVer precedence, not by time.                               |
 
 `app` matches `^[a-z0-9][a-z0-9-]{0,62}$`. `version` is a [SemVer 2.0.0](https://semver.org/) string
 (`src/semver.ts`); a version with a prerelease part (`0.1.3-dev.4`) is on the `dev` channel, any other on
@@ -46,7 +46,10 @@ authenticated call. Another Workspace, or the same Workspace id under another is
 `GET /public/v1/orgs/{orgId}/apps/{app}/releases/{version}` needs no token and answers 200
 `{ app, version, channel, notes, updatedAt }` with `cache-control: no-cache`, or 404 `not_found`. A malformed
 org id, app or version gets the same 404 as a release that does not exist. The org id is the id of the org
-(`orgs.id`), not a secret: anyone who knows it can read what that org published.
+(`orgs.id`), not a secret: anyone who knows it can read what that org published. `releases.notes.put` and
+`releases.notes.get` return it as `orgId`, with the ready URL as `publicUrl`
+(`APP_ORIGIN/public/v1/orgs/{orgId}/apps/{app}/releases/{version}`, the version percent-encoded); the public
+body itself has neither.
 
 ## Environment variables
 
