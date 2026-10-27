@@ -37,7 +37,8 @@ test("actions are coherent", () => {
     }
     if (a.idempotency === "safe") expect(a.effect).toBe("read");
     if (a.effect === "delete") expect(a.endpoint.method).toBe("DELETE");
-    expect(a.idempotency === "key_required").toBe("idempotency_header" in a);
+    expect("idempotency_header" in a).toBe(false);
+    expect(a.idempotency).not.toBe("key_required");
     expect([...a.required_scopes]).toEqual([...a.required_scopes].sort());
     expect(a.input_schema.type).toBe("object");
     for (const [, param] of a.endpoint.path.matchAll(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g)) {

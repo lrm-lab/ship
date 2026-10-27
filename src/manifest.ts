@@ -12,22 +12,20 @@ import type { Config } from "./config";
 import { SEMVER_PATTERN } from "./semver";
 import type { Schema } from "./validate";
 
-type ActionBase = {
+/**
+ * An action as Ship declares it. No `key_required` action exists: that needs a database-backed
+ * idempotency store (see AGENTS.md), so the type does not allow it or an `idempotency_header`.
+ */
+export type Action = {
   name: string;
   description?: string;
   effect: "read" | "create" | "update" | "delete" | "external_side_effect";
   endpoint: { method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"; path: string };
+  idempotency: "safe" | "idempotent" | "non_idempotent";
   required_scopes: readonly string[];
   input_schema: Schema;
   output_schema?: Schema;
 };
-
-/** `idempotency_header` exists exactly when the action is `key_required`. */
-export type Action = ActionBase &
-  (
-    | { idempotency: "key_required"; idempotency_header: string }
-    | { idempotency: "safe" | "idempotent" | "non_idempotent"; idempotency_header?: undefined }
-  );
 
 export const MANIFEST_PATH = "/.well-known/coforge-agent-manifest.json";
 export const API_PREFIX = "/api";

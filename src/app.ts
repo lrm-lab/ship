@@ -1,11 +1,9 @@
 import { Hono } from "hono";
-import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { bodyLimit } from "hono/body-limit";
 import type { JWTVerifyGetKey } from "jose";
 import { createTokenVerifier, missingScopes, type Caller } from "./auth";
 import type { Config } from "./config";
-import type { HandlerResponse, Handlers } from "./handler";
-import { createIdempotencyStore } from "./idempotency";
+import type { Handlers } from "./handler";
 import {
   API_PREFIX,
   MANIFEST_PATH,
@@ -30,7 +28,6 @@ export type AppDeps = {
   store?: ReleaseStore;
   actions?: Action[];
   handlers?: Handlers;
-  idempotency?: ReturnType<typeof createIdempotencyStore>;
 };
 
 export function createApp(
@@ -39,7 +36,6 @@ export function createApp(
     keys,
     store,
     handlers = store ? createReleaseHandlers(store, config.appOrigin) : {},
-    idempotency = createIdempotencyStore(),
     actions = defaultActions,
   }: AppDeps = {},
 ) {
@@ -133,59 +129,7 @@ export function createApp(
         if (problems.length > 0)
           return c.json({ error: "invalid_input", message: "Input is invalid", problems }, 400);
 
-        // 4. Idempotency: a key_required action runs once per key. The key is reserved before the
-        //    handler runs; a duplicate that arrives meanwhile gets 409 with Retry-After.
-        let scope = "";
-        let key: string | undefined;
-        if (action.idempotency === "key_required") {
-          key = c.req.header(action.idempotency_header)?.trim();
-          if (!key || key.length > 255) {
-            return c.json(
-              { error: "idempotency_key_required", message: `Send ${action.idempotency_header}` },
-              400,
-            );
-          }
-          scope = `${caller.issuer}\n${caller.workspaceId}\n${caller.agentId}\n${action.name}`;
-          const seen = idempotency.begin(scope, key, input);
-          if (seen.state === "conflict") {
-            return c.json(
-              {
-                error: "idempotency_key_reused",
-                message: "That key was used with different input",
-              },
-              422,
-            );
-          }
-          if (seen.state === "in_flight") {
-            c.header("Retry-After", "1");
-            return c.json(
-              {
-                error: "request_in_progress",
-                message: "The first call with this key is still running; retry shortly",
-              },
-              409,
-            );
-          }
-          if (seen.state === "replay") {
-            c.header("Idempotency-Replayed", "true");
-            return c.json(
-              seen.response.body as never,
-              seen.response.status as ContentfulStatusCode,
-            );
-          }
-        }
-
-        let response: HandlerResponse;
-        try {
-          response = await handlers[action.name]!(input, caller);
-        } catch (error) {
-          if (key) idempotency.release(scope, key);
-          throw error;
-        }
-        if (key) {
-          if (response.status < 300) idempotency.complete(scope, key, response);
-          else idempotency.release(scope, key); // a failed call may be retried
-        }
+        const response = await handlers[action.name]!(input, caller);
         return c.json(response.body as never, response.status);
       },
     );

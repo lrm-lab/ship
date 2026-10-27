@@ -36,8 +36,7 @@ const whoami: Action = {
 const echo: Action = {
   name: "test.echo",
   effect: "create",
-  idempotency: "key_required",
-  idempotency_header: "Idempotency-Key",
+  idempotency: "non_idempotent",
   endpoint: { method: "POST", path: "/echo" },
   required_scopes: [],
   input_schema: {
@@ -203,9 +202,8 @@ describe("hosted HTTP action service", () => {
 
   test("validates input", async () => {
     const bearer = await token();
-    const headers = { "idempotency-key": "k-invalid" };
     for (const body of [{}, { title: "" }, { title: "ok", extra: 1 }, { title: 5 }]) {
-      const res = await call("/api/echo", { method: "POST", bearer, body, headers });
+      const res = await call("/api/echo", { method: "POST", bearer, body });
       expect(res.status).toBe(400);
       expect((await res.json()).error).toBe("invalid_input");
     }
@@ -213,7 +211,6 @@ describe("hosted HTTP action service", () => {
       method: "POST",
       headers: {
         authorization: `Bearer ${bearer}`,
-        "idempotency-key": "k",
         "content-type": "application/json",
       },
       body: "{nope",
@@ -221,45 +218,14 @@ describe("hosted HTTP action service", () => {
     expect(notJson.status).toBe(400);
   });
 
-  test("requires the idempotency header on a key_required action", async () => {
+  test("a valid body reaches the handler", async () => {
     const res = await call("/api/echo", {
       method: "POST",
       bearer: await token(),
-      body: { title: "t" },
-    });
-    expect(res.status).toBe(400);
-    expect((await res.json()).error).toBe("idempotency_key_required");
-  });
-
-  test("create, replay with the same key, conflict on different input", async () => {
-    const bearer = await token();
-    const headers = { "idempotency-key": "key-1" };
-    const first = await call("/api/echo", {
-      method: "POST",
-      bearer,
       body: { title: "Hello", body: "world" },
-      headers,
     });
-    expect(first.status).toBe(201);
-    const note = await first.json();
-
-    const replay = await call("/api/echo", {
-      method: "POST",
-      bearer,
-      body: { body: "world", title: "Hello" },
-      headers,
-    });
-    expect(replay.status).toBe(201);
-    expect(replay.headers.get("idempotency-replayed")).toBe("true");
-    expect(await replay.json()).toEqual(note);
-
-    const clash = await call("/api/echo", {
-      method: "POST",
-      bearer,
-      body: { title: "Different" },
-      headers,
-    });
-    expect(clash.status).toBe(422);
+    expect(res.status).toBe(201);
+    expect(await res.json()).toMatchObject({ title: "Hello", body: "world" });
   });
 
   test("the caller is the issuer, Workspace and Agent of the token", async () => {
@@ -282,8 +248,7 @@ describe("hosted HTTP action service", () => {
     const base = {
       effect: "create" as const,
       endpoint: { method: "POST" as const, path: "/slow" },
-      idempotency: "key_required" as const,
-      idempotency_header: "Idempotency-Key",
+      idempotency: "non_idempotent" as const,
       required_scopes: [],
       input_schema: {
         type: "object",
@@ -292,56 +257,18 @@ describe("hosted HTTP action service", () => {
         additionalProperties: false,
       },
     };
-    const post = (a: Hono, body: unknown, key: string) =>
+    const post = (a: Hono, body: unknown) =>
       a.request(`${BASE}/api/slow`, {
         method: "POST",
         headers: {
           authorization: `Bearer ${bearerPromise}`,
           "content-type": "application/json",
-          "idempotency-key": key,
         },
         body: JSON.stringify(body),
       });
     let bearerPromise = "";
     beforeAll(async () => {
       bearerPromise = await token();
-    });
-
-    test("a duplicate that arrives while the first call runs gets 409, then the replay", async () => {
-      let runs = 0;
-      let release: (value?: unknown) => void = () => {};
-      const gate = new Promise((resolve) => (release = resolve));
-      const a = createApp(config, {
-        keys: keysByIssuer(),
-        actions: [{ ...base, name: "slow.run" }],
-        handlers: {
-          "slow.run": async () => ((runs += 1), await gate, { status: 201, body: { ran: runs } }),
-        },
-      });
-      const first = post(a, { n: 1 }, "same");
-      await new Promise((r) => setTimeout(r, 20));
-      const second = await post(a, { n: 1 }, "same");
-      expect(second.status).toBe(409);
-      expect(second.headers.get("retry-after")).toBe("1");
-      release();
-      expect((await first).status).toBe(201);
-      const third = await post(a, { n: 1 }, "same");
-      expect(third.headers.get("idempotency-replayed")).toBe("true");
-      expect(runs).toBe(1);
-    });
-
-    test("a failed call releases its key so a retry can run", async () => {
-      let runs = 0;
-      const a = createApp(config, {
-        keys: keysByIssuer(),
-        actions: [{ ...base, name: "slow.run" }],
-        handlers: {
-          "slow.run": async () =>
-            ++runs === 1 ? { status: 503, body: { error: "later" } } : { status: 201, body: {} },
-        },
-      });
-      expect((await post(a, { n: 1 }, "retry")).status).toBe(503);
-      expect((await post(a, { n: 1 }, "retry")).status).toBe(201);
     });
 
     test("a body over the limit is refused, chunked or not", async () => {
@@ -351,7 +278,7 @@ describe("hosted HTTP action service", () => {
         handlers: { "slow.run": () => ({ status: 201, body: {} }) },
       });
       const big = JSON.stringify({ n: 1, pad: "x".repeat(1100 * 1024) });
-      expect((await post(a, JSON.parse(big), "big")).status).toBe(413);
+      expect((await post(a, JSON.parse(big))).status).toBe(413);
       const chunked = new ReadableStream({
         start(controller) {
           controller.enqueue(new TextEncoder().encode(big));
@@ -363,7 +290,6 @@ describe("hosted HTTP action service", () => {
         headers: {
           authorization: `Bearer ${bearerPromise}`,
           "content-type": "application/json",
-          "idempotency-key": "chunk",
         },
         body: chunked,
         duplex: "half",

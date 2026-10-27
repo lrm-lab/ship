@@ -21,7 +21,7 @@ Ship is a CoForge App (README.md): Hono on Bun, Prisma and PostgreSQL, JSON over
 - Imports inside the package use the `#src/` alias (`#src/store/database`), siblings use `./`; never write
   `../` into `src/`. Tests import the code through `#src/`.
 - `src/manifest.ts` actions are the single source of truth: `src/app.ts` builds routes, input validation, scope
-  checks and idempotency from them (generic machinery, with `validate.ts` and `idempotency.ts`).
+  checks from them (generic machinery, with `validate.ts`).
   `src/releases.ts` has one handler per action; the service refuses to boot with an action lacking one.
 - `src/store/`: the `ReleaseStore` interface and its Prisma implementation own every query; handlers depend
   on the interface only. Every query is scoped by `orgId` (issuer + Workspace id).
@@ -55,9 +55,11 @@ Ship is a CoForge App (README.md): Hono on Bun, Prisma and PostgreSQL, JSON over
 
 - Edit `src/manifest.ts` first: the action, its `input_schema`, `required_scopes` (sorted; only Login with
   CoForge scopes `openid`, `profile`, `identity`, `email`; `[]` is identity only), `idempotency` and `effect`
-  (a GET is `read` and `safe`; a `key_required` action names its `idempotency_header`). Then the handler in
+  (a GET is `read` and `safe`). Then the handler in
   `src/releases.ts`. `test/manifest.test.ts` checks the manifest against the vendored schema and the
   coherence rules. A manifest `pattern` is descriptive only: CoForge never runs it, Ship's `validate.ts` does.
+- No action may be `key_required`: that needs an idempotency store in the database, because an in-memory
+  one is wrong for several instances. Add the store (and its tests) in the same change as the first such action.
 - Update README.md in the same change as any action, route or environment variable.
 
 ## Contract version
