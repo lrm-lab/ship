@@ -4,24 +4,26 @@ export type SemVer = {
   minor: string;
   patch: string;
   prerelease: string[];
-  build: string[];
 };
 
-// The regular expression published on semver.org, with \d written as [0-9] so only ASCII digits match.
-const SEMVER =
-  /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-((?:0|[1-9][0-9]*|[0-9]*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/;
+/**
+ * The regular expression published on semver.org, with \d written as [0-9] so only ASCII digits match
+ * and the build metadata not captured. Its source is also the manifest's `pattern` for a version.
+ */
+export const SEMVER_PATTERN =
+  "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-((?:0|[1-9][0-9]*|[0-9]*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+[0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*)?$";
+const SEMVER = new RegExp(SEMVER_PATTERN, "u");
 
 /** The parts of a valid SemVer 2.0.0 string, or null when it is not one (no leading `v`, no spaces). */
 export function parseSemVer(text: string): SemVer | null {
   const match = SEMVER.exec(text);
   if (!match) return null;
-  const [, major, minor, patch, prerelease, build] = match;
+  const [, major, minor, patch, prerelease] = match;
   return {
     major: major as string,
     minor: minor as string,
     patch: patch as string,
     prerelease: prerelease ? prerelease.split(".") : [],
-    build: build ? build.split(".") : [],
   };
 }
 
@@ -57,4 +59,14 @@ export function compareSemVer(a: SemVer, b: SemVer): number {
     if (result !== 0) return result;
   }
   return a.prerelease.length - b.prerelease.length; // a larger set of fields is higher
+}
+
+/**
+ * Orders version strings, lowest first: by SemVer precedence, then by text, so versions that differ
+ * only in build metadata (equal precedence) still have one fixed order. The strings must be valid
+ * SemVer; Ship only stores versions it has validated.
+ */
+export function compareVersions(a: string, b: string): number {
+  const byPrecedence = compareSemVer(parseSemVer(a) as SemVer, parseSemVer(b) as SemVer);
+  return byPrecedence || (a < b ? -1 : a > b ? 1 : 0);
 }

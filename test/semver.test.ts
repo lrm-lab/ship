@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { compareSemVer, parseSemVer } from "#src/semver";
+import { compareSemVer, compareVersions, parseSemVer, SEMVER_PATTERN } from "#src/semver";
 
 describe("parseSemVer (https://semver.org/ 2.0.0)", () => {
   test("splits a version into its parts", () => {
@@ -8,21 +8,18 @@ describe("parseSemVer (https://semver.org/ 2.0.0)", () => {
       minor: "2",
       patch: "3",
       prerelease: [],
-      build: [],
     });
     expect(parseSemVer("0.1.3-dev.4")).toEqual({
       major: "0",
       minor: "1",
       patch: "3",
       prerelease: ["dev", "4"],
-      build: [],
     });
     expect(parseSemVer("1.0.0-beta+exp.sha.5114f85")).toEqual({
       major: "1",
       minor: "0",
       patch: "0",
       prerelease: ["beta"],
-      build: ["exp", "sha", "5114f85"],
     });
   });
 
@@ -121,5 +118,30 @@ describe("compareSemVer", () => {
     expect(
       compareSemVer(parseSemVer("1.0.0-9007199254740993")!, parseSemVer("1.0.0-9007199254740992")!),
     ).toBe(1);
+  });
+});
+
+describe("SEMVER_PATTERN", () => {
+  test("fits the manifest's 256 character pattern limit and compiles with the u flag", () => {
+    expect(SEMVER_PATTERN.length).toBeLessThanOrEqual(256);
+    const pattern = new RegExp(SEMVER_PATTERN, "u");
+    expect(pattern.test("0.1.3-dev.4")).toBe(true);
+    expect(pattern.test("1.0.0+20130313144700")).toBe(true);
+    expect(pattern.test("v1.0.0")).toBe(false);
+    expect(pattern.test("1.2.3\n")).toBe(false);
+  });
+});
+
+describe("compareVersions", () => {
+  test("orders version strings by precedence, then by text so equal precedence is stable", () => {
+    const versions = ["1.0.0+b", "1.0.0", "1.0.0+a", "1.0.0-rc.1", "0.9.0", "1.0.0-rc.1+x"];
+    expect([...versions].sort(compareVersions)).toEqual([
+      "0.9.0",
+      "1.0.0-rc.1",
+      "1.0.0-rc.1+x",
+      "1.0.0",
+      "1.0.0+a",
+      "1.0.0+b",
+    ]);
   });
 });
