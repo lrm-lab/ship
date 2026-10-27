@@ -3,21 +3,21 @@ import { channelOf } from "#src/releases";
 import { createDatabase, type Database } from "#src/store/database";
 import { createPrismaReleaseStore } from "#src/store/prisma-release-store";
 import type { ReleaseStore } from "#src/store/release-store";
-import { startDisposablePostgres, type DisposablePostgres } from "./support/postgres";
+import { createTestDatabase, type TestDatabase } from "./support/postgres";
 
-let postgres: DisposablePostgres;
+let postgres: TestDatabase;
 let database: Database;
 let store: ReleaseStore;
 
 beforeAll(async () => {
-  postgres = await startDisposablePostgres();
+  postgres = await createTestDatabase();
   database = createDatabase(postgres.url);
   store = createPrismaReleaseStore(database.client);
 }, 120_000);
 
 afterAll(async () => {
   await database?.close();
-  await postgres?.stop();
+  await postgres?.drop();
 });
 
 const put = (orgId: string, version: string, notes: Record<string, string>, agentId = "agent-1") =>

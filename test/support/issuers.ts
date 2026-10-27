@@ -57,3 +57,11 @@ export function signAgentToken(
     .setJti(crypto.randomUUID())
     .sign(key ?? issuer.privateKey);
 }
+
+/** The value of SHIP_TRUSTED_ISSUERS that trusts these issuers, each with its own client ID. */
+export const trustedIssuersEnv = (...issuers: TestIssuer[]): string =>
+  JSON.stringify(issuers.map(({ issuer, clientId }) => ({ issuer, clientId })));
+
+/** The key sets createApp takes in place of the remote `<issuer>/jwks` ones. */
+export const keySetsOf = (...issuers: TestIssuer[]): Record<string, JWTVerifyGetKey> =>
+  Object.fromEntries(issuers.map(({ issuer, keySet }) => [issuer, keySet]));

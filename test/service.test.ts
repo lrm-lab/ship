@@ -7,7 +7,9 @@ import { buildManifest, type Action } from "#src/manifest";
 import type { OrgKey, ReleaseStore } from "#src/store/release-store";
 import {
   createTestIssuer,
+  keySetsOf,
   signAgentToken,
+  trustedIssuersEnv,
   type AgentTokenOptions,
   type TestIssuer,
 } from "./support/issuers";
@@ -86,7 +88,7 @@ const testHandlers = {
   }),
 };
 
-const keysByIssuer = () => ({ [issuerA.issuer]: issuerA.keySet, [issuerB.issuer]: issuerB.keySet });
+const keysByIssuer = () => keySetsOf(issuerA, issuerB);
 
 type CallOptions = {
   method?: string;
@@ -114,10 +116,7 @@ describe("hosted HTTP action service", () => {
     issuerB = await createTestIssuer("https://b.coforge.example/oidc", "ship-b");
     otherKey = (await generateKeyPair("ES256")).privateKey;
     config = loadConfig({
-      SHIP_TRUSTED_ISSUERS: JSON.stringify([
-        { issuer: issuerA.issuer, clientId: issuerA.clientId },
-        { issuer: issuerB.issuer, clientId: issuerB.clientId },
-      ]),
+      SHIP_TRUSTED_ISSUERS: trustedIssuersEnv(issuerA, issuerB),
       APP_ORIGIN: BASE,
       DATABASE_URL: "postgresql://unused@localhost:5432/unused",
     });

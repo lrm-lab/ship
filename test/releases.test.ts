@@ -5,12 +5,19 @@ import { publicReleaseUrl } from "#src/public-routes";
 import { loadConfig } from "#src/config";
 import { createDatabase, type Database } from "#src/store/database";
 import { createPrismaReleaseStore } from "#src/store/prisma-release-store";
-import { createTestIssuer, signAgentToken, type TestIssuer } from "./support/issuers";
-import { startDisposablePostgres, type DisposablePostgres } from "./support/postgres";
+import { notesPath } from "./support/api";
+import {
+  createTestIssuer,
+  keySetsOf,
+  signAgentToken,
+  trustedIssuersEnv,
+  type TestIssuer,
+} from "./support/issuers";
+import { createTestDatabase, type TestDatabase } from "./support/postgres";
 
 const BASE = "https://ship.example.com";
 
-let postgres: DisposablePostgres;
+let postgres: TestDatabase;
 let database: Database;
 let app: Hono;
 let issuerA: TestIssuer;
@@ -19,25 +26,22 @@ let issuerB: TestIssuer;
 beforeAll(async () => {
   issuerA = await createTestIssuer("https://a.coforge.example/oidc", "ship-a");
   issuerB = await createTestIssuer("https://b.coforge.example/oidc", "ship-b");
-  postgres = await startDisposablePostgres();
+  postgres = await createTestDatabase();
   database = createDatabase(postgres.url);
   const config = loadConfig({
-    SHIP_TRUSTED_ISSUERS: JSON.stringify([
-      { issuer: issuerA.issuer, clientId: issuerA.clientId },
-      { issuer: issuerB.issuer, clientId: issuerB.clientId },
-    ]),
+    SHIP_TRUSTED_ISSUERS: trustedIssuersEnv(issuerA, issuerB),
     APP_ORIGIN: BASE,
     DATABASE_URL: postgres.url,
   });
   app = createApp(config, {
-    keys: { [issuerA.issuer]: issuerA.keySet, [issuerB.issuer]: issuerB.keySet },
+    keys: keySetsOf(issuerA, issuerB),
     store: createPrismaReleaseStore(database.client),
   });
 }, 120_000);
 
 afterAll(async () => {
   await database?.close();
-  await postgres?.stop();
+  await postgres?.drop();
 });
 
 type Who = { issuer?: TestIssuer; workspace?: string; agent?: string };
@@ -59,13 +63,13 @@ async function call(
 }
 
 const putNotes = (app: string, version: string, notes: unknown, who?: Who) =>
-  call(`/api/apps/${app}/releases/${encodeURIComponent(version)}/notes`, {
+  call(notesPath(app, version), {
     method: "PUT",
     body: { notes },
     who,
   });
 const getNotes = (app: string, version: string, who?: Who) =>
-  call(`/api/apps/${app}/releases/${encodeURIComponent(version)}/notes`, { who });
+  call(notesPath(app, version), { who });
 
 describe("releases.notes.put and releases.notes.get", () => {
   test("puts the notes of a version, then reads them back", async () => {

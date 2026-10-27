@@ -1,8 +1,14 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { SQL } from "bun";
-import { createTestIssuer, signAgentToken, type TestIssuer } from "./support/issuers";
-import { startDisposablePostgres, type DisposablePostgres } from "./support/postgres";
+import { notesPath } from "./support/api";
+import {
+  createTestIssuer,
+  signAgentToken,
+  trustedIssuersEnv,
+  type TestIssuer,
+} from "./support/issuers";
+import { createTestDatabase, type TestDatabase } from "./support/postgres";
 
 /**
  * End to end: the real server process (`bun src/server.ts`) against a disposable PostgreSQL, with
@@ -41,7 +47,7 @@ async function freePort(): Promise<number> {
   return port as number;
 }
 
-let postgres: DisposablePostgres;
+let postgres: TestDatabase;
 let sql: SQL;
 let child: ReturnType<typeof Bun.spawn> | undefined;
 let base = "";
@@ -100,16 +106,13 @@ async function step(name: string, caller: As, method: string, path: string, body
   return { status: res.status, body: parsed as any, headers: res.headers };
 }
 
-const notesPath = (app: string, version: string) =>
-  `/api/apps/${app}/releases/${encodeURIComponent(version)}/notes`;
-
 beforeAll(async () => {
   [{ issuer: issuerA }, { issuer: issuerB }, { issuer: untrusted }] = await Promise.all([
     startFakeIssuer("ship-a"),
     startFakeIssuer("ship-b"),
     startFakeIssuer("ship-untrusted"),
   ]);
-  postgres = await startDisposablePostgres();
+  postgres = await createTestDatabase();
   sql = new SQL(postgres.url);
   const port = await freePort();
   base = `http://127.0.0.1:${port}`;
@@ -117,10 +120,7 @@ beforeAll(async () => {
     cwd: root,
     env: {
       ...process.env,
-      SHIP_TRUSTED_ISSUERS: JSON.stringify([
-        { issuer: issuerA.issuer, clientId: issuerA.clientId },
-        { issuer: issuerB.issuer, clientId: issuerB.clientId },
-      ]),
+      SHIP_TRUSTED_ISSUERS: trustedIssuersEnv(issuerA, issuerB),
       APP_ORIGIN: base,
       PORT: String(port),
       HOST: "127.0.0.1",
@@ -148,7 +148,7 @@ afterAll(async () => {
   await child?.exited;
   await sql?.close().catch(() => {});
   for (const { server } of fakes) await server.stop(true);
-  await postgres?.stop();
+  await postgres?.drop();
   if (transcript.length > 0) {
     mkdirSync(ARTIFACT_DIR, { recursive: true });
     writeFileSync(
