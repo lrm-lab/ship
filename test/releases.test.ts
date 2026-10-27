@@ -180,8 +180,15 @@ describe("releases.notes.put and releases.notes.get", () => {
       });
     }
 
-    test("accepts text of exactly 16000 characters after trimming, and 20 locales", async () => {
-      const exact = `  ${"x".repeat(16000)}  `;
+    test("text is limited to 16000 characters as sent, so padding cannot push a text past the limit", async () => {
+      const padded = `  ${"x".repeat(16000)}  `;
+      const res = await putNotes("limits", "1.0.0", { en: padded });
+      expect(res.status).toBe(400);
+      expect((await res.json()).problems[0]).toContain("notes.en");
+    });
+
+    test("accepts text of exactly 16000 characters, and 20 locales", async () => {
+      const exact = "x".repeat(16000);
       const twenty = Object.fromEntries(
         Array.from({ length: 20 }, (_, i) => [`b${String.fromCharCode(97 + i)}`, "x"]),
       );

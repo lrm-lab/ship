@@ -1,9 +1,23 @@
 import type { Hono } from "hono";
-import { isAppName, isOrgId, isVersion } from "./release-input";
+import { APP_SCHEMA, VERSION_SCHEMA } from "./manifest";
 import { releaseBody } from "./release-body";
 import type { ReleaseStore } from "./store/release-store";
+import { validate, type Schema } from "./validate";
 
 export const PUBLIC_RELEASE_PATH = "/public/v1/orgs/:orgId/apps/:app/releases/:version";
+
+const PARAMS_SCHEMA: Schema = {
+  type: "object",
+  properties: {
+    orgId: {
+      type: "string",
+      pattern: "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+    },
+    app: APP_SCHEMA,
+    version: VERSION_SCHEMA,
+  },
+  required: ["orgId", "app", "version"],
+};
 
 /**
  * The public, token-less read of one release's notes, for CoForge Web's "What's new". It is not
@@ -14,10 +28,14 @@ export const PUBLIC_RELEASE_PATH = "/public/v1/orgs/:orgId/apps/:app/releases/:v
 export function registerPublicRoutes(app: Hono, store: ReleaseStore) {
   app.get(PUBLIC_RELEASE_PATH, async (c) => {
     c.header("Cache-Control", "no-cache");
-    const { orgId, app: appName, version } = c.req.param();
+    const params = c.req.param();
     const release =
-      orgId && appName && version && isOrgId(orgId) && isAppName(appName) && isVersion(version)
-        ? await store.getRelease(orgId, appName, version)
+      validate(PARAMS_SCHEMA, params).length === 0
+        ? await store.getRelease(
+            params.orgId as string,
+            params.app as string,
+            params.version as string,
+          )
         : null;
     if (!release) return c.json({ error: "not_found", message: "No such release" }, 404);
     return c.json(releaseBody(release));

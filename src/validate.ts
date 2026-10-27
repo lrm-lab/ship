@@ -2,7 +2,12 @@ export type Schema = {
   type?: string;
   properties?: Record<string, Schema>;
   required?: readonly string[];
-  additionalProperties?: boolean;
+  /** false refuses undeclared properties; a schema validates each of them. */
+  additionalProperties?: boolean | Schema;
+  /** A schema every property name must satisfy (a string schema, typically a pattern). */
+  propertyNames?: Schema;
+  minProperties?: number;
+  maxProperties?: number;
   enum?: readonly (string | number | boolean | null)[];
   const?: string | number | boolean | null;
   minimum?: number;
@@ -16,11 +21,20 @@ export type Schema = {
   [key: string]: unknown;
 };
 
+const patterns = new Map<string, RegExp>();
+/** A `pattern` is compiled once, with the u flag as the manifest spec says. */
+function matches(pattern: string, value: string): boolean {
+  let regexp = patterns.get(pattern);
+  if (!regexp) patterns.set(pattern, (regexp = new RegExp(pattern, "u")));
+  return regexp.test(value);
+}
+
 /**
- * Validates `value` against the manifest schema subset this template uses
- * (type, properties, required, additionalProperties, enum, const, min/max,
- * minLength/maxLength, pattern, items, minItems/maxItems). CoForge's CLI checks input too,
- * but the service must not trust its caller. Returns problem strings; [] means valid.
+ * Validates `value` against the schema keywords Ship uses: the manifest subset (type, properties,
+ * required, additionalProperties, enum, const, min/max, minLength/maxLength, pattern, items,
+ * minItems/maxItems) and, beyond it, additionalProperties as a schema, propertyNames,
+ * minProperties and maxProperties. CoForge's CLI checks input too (but never runs `pattern`), and
+ * the service must not trust its caller. Returns problem strings; [] means valid.
  */
 export function validate(schema: Schema, value: unknown, path = ""): string[] {
   const at = path || "input";
@@ -43,7 +57,7 @@ export function validate(schema: Schema, value: unknown, path = ""): string[] {
       problems.push(`${at} is shorter than ${schema.minLength}`);
     if (schema.maxLength !== undefined && value.length > schema.maxLength)
       problems.push(`${at} is longer than ${schema.maxLength}`);
-    if (schema.pattern !== undefined && !new RegExp(schema.pattern, "u").test(value))
+    if (schema.pattern !== undefined && !matches(schema.pattern, value))
       problems.push(`${at} must match ${schema.pattern}`);
   }
   if (typeof value === "number") {
@@ -67,11 +81,24 @@ export function validate(schema: Schema, value: unknown, path = ""): string[] {
     for (const name of schema.required ?? []) {
       if (!Object.hasOwn(object, name)) problems.push(`${prefix}${name} is required`);
     }
+    const count = Object.keys(object).length;
+    if (schema.minProperties !== undefined && count < schema.minProperties)
+      problems.push(`${at} has fewer than ${schema.minProperties} properties`);
+    if (schema.maxProperties !== undefined && count > schema.maxProperties)
+      problems.push(`${at} has more than ${schema.maxProperties} properties`);
+    const { propertyNames, additionalProperties } = schema;
     for (const [name, item] of Object.entries(object)) {
+      if (propertyNames) {
+        problems.push(
+          ...validate(propertyNames, name, `property name ${JSON.stringify(name)} of ${at}`),
+        );
+      }
       const declared = Object.hasOwn(properties, name) ? properties[name] : undefined;
       if (declared) problems.push(...validate(declared, item, `${prefix}${name}`));
-      else if (schema.additionalProperties === false)
-        problems.push(`${prefix}${name} is not allowed`);
+      else if (additionalProperties === false) problems.push(`${prefix}${name} is not allowed`);
+      else if (typeof additionalProperties === "object") {
+        problems.push(...validate(additionalProperties, item, `${prefix}${name}`));
+      }
     }
   }
   return problems;

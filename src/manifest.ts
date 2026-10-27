@@ -9,6 +9,7 @@
  */
 
 import type { Config } from "./config";
+import { SEMVER_PATTERN } from "./semver";
 import type { Schema } from "./validate";
 
 type ActionBase = {
@@ -31,28 +32,40 @@ export type Action = ActionBase &
 export const MANIFEST_PATH = "/.well-known/coforge-agent-manifest.json";
 export const API_PREFIX = "/api";
 
-export const APP_NAME_PATTERN = "^[a-z0-9][a-z0-9-]{0,62}$";
-export const LOCALE_PATTERN = "^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$";
-export const NOTES_MAX_LOCALES = 20;
-export const NOTES_MAX_LENGTH = 16000;
 export const LIST_DEFAULT_LIMIT = 20;
 export const LIST_MAX_LIMIT = 100;
 
-const app = {
+/** An app's slug. Shared with the public route, which validates its `app` segment with it. */
+export const APP_SCHEMA: Schema = {
   type: "string",
   minLength: 1,
   maxLength: 63,
-  pattern: APP_NAME_PATTERN,
+  pattern: "^[a-z0-9][a-z0-9-]{0,62}$",
   description: "The app's slug: lower-case letters, digits and dashes, such as coforge-computer.",
-} as const;
+};
 
-const version = {
+/** A SemVer 2.0.0 version. Shared with the public route. */
+export const VERSION_SCHEMA: Schema = {
   type: "string",
   minLength: 5,
   maxLength: 128,
+  pattern: SEMVER_PATTERN,
   description:
     "A SemVer 2.0.0 version, such as 1.4.0 or 0.1.3-dev.4. A prerelease part puts it on the dev channel.",
-} as const;
+};
+
+const app = APP_SCHEMA;
+const version = VERSION_SCHEMA;
+
+const NOTES_SCHEMA: Schema = {
+  type: "object",
+  description:
+    'Markdown by locale, such as {"en": "...", "zh-CN": "..."}. 1 to 20 locales; a locale is a language tag such as en or zh-CN; each text has 1 to 16000 characters and some non-whitespace. Ship trims each text before storing it.',
+  minProperties: 1,
+  maxProperties: 20,
+  propertyNames: { pattern: "^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$" },
+  additionalProperties: { type: "string", minLength: 1, maxLength: 16000, pattern: "\\S" },
+};
 
 const channel = { type: "string", enum: ["dev", "stable"] } as const;
 
@@ -89,11 +102,7 @@ export const actions: Action[] = [
       properties: {
         app,
         version,
-        notes: {
-          type: "object",
-          description: `Markdown by locale, such as {"en": "...", "zh-CN": "..."}. 1 to ${NOTES_MAX_LOCALES} locales; a locale matches ${LOCALE_PATTERN}; each text is 1 to ${NOTES_MAX_LENGTH} characters after trimming.`,
-          additionalProperties: true,
-        },
+        notes: NOTES_SCHEMA,
       },
       required: ["app", "version", "notes"],
       additionalProperties: false,
@@ -160,7 +169,42 @@ export const actions: Action[] = [
   },
 ];
 
-export function buildManifest(config: Pick<Config, "appOrigin">) {
+/**
+ * Ship validates more than the manifest's schema subset can say: `additionalProperties` as a schema,
+ * `propertyNames`, `minProperties` and `maxProperties` (see validate.ts). CoForge rejects a manifest
+ * with any of those keywords, so the published schema keeps the subset (`additionalProperties`
+ * becomes `true`) and carries each dropped keyword under an `x-` name, which CoForge ignores.
+ */
+export function publishedSchema(schema: Schema): Schema {
+  const {
+    properties,
+    items,
+    additionalProperties,
+    propertyNames,
+    minProperties,
+    maxProperties,
+    ...rest
+  } = schema;
+  const published: Schema = { ...rest };
+  if (properties) {
+    published.properties = Object.fromEntries(
+      Object.entries(properties).map(([name, child]) => [name, publishedSchema(child)]),
+    );
+  }
+  if (items) published.items = publishedSchema(items);
+  if (typeof additionalProperties === "boolean")
+    published.additionalProperties = additionalProperties;
+  else if (additionalProperties) {
+    published.additionalProperties = true;
+    published["x-additionalProperties"] = additionalProperties;
+  }
+  if (propertyNames) published["x-propertyNames"] = propertyNames;
+  if (minProperties !== undefined) published["x-minProperties"] = minProperties;
+  if (maxProperties !== undefined) published["x-maxProperties"] = maxProperties;
+  return published;
+}
+
+export function buildManifest(config: Pick<Config, "appOrigin">, served: Action[] = actions) {
   return {
     schema: "coforge-agent-manifest.v1",
     name: "Ship",
@@ -169,6 +213,10 @@ export function buildManifest(config: Pick<Config, "appOrigin">) {
     app_origin: config.appOrigin,
     execution: { mode: "http_api", base_url: `${config.appOrigin}${API_PREFIX}` },
     auth: { type: "login_with_coforge" },
-    actions,
+    actions: served.map((action) => ({
+      ...action,
+      input_schema: publishedSchema(action.input_schema),
+      ...(action.output_schema && { output_schema: publishedSchema(action.output_schema) }),
+    })),
   };
 }

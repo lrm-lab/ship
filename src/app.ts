@@ -53,7 +53,7 @@ export function createApp(
 
   app.get(MANIFEST_PATH, (c) => {
     c.header("Cache-Control", "public, max-age=300");
-    return c.json({ ...buildManifest(config), actions });
+    return c.json(buildManifest(config, actions));
   });
   app.get("/healthz", (c) => c.json({ ok: true }));
   if (store) registerPublicRoutes(app, store);
