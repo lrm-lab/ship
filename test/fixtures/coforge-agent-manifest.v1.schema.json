@@ -1,0 +1,340 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "coforge-agent-manifest.v1",
+  "type": "object",
+  "required": [
+    "schema",
+    "execution"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "coforge-agent-manifest.v1"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "docs_url": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https://",
+      "maxLength": 2048
+    },
+    "app_origin": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https://",
+      "maxLength": 2048
+    },
+    "execution": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "mode",
+            "base_url"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "const": "http_api"
+            },
+            "base_url": {
+              "type": "string",
+              "format": "uri",
+              "pattern": "^https://",
+              "maxLength": 2048
+            }
+          },
+          "patternProperties": {
+            "^x-": {}
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "mode",
+            "command"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "const": "local_cli"
+            },
+            "command": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_+-][A-Za-z0-9._+-]*$",
+              "maxLength": 64
+            }
+          },
+          "patternProperties": {
+            "^x-": {}
+          }
+        }
+      ]
+    },
+    "credential_boundary": {
+      "type": "object",
+      "required": [
+        "storage",
+        "forbid_user_home"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "storage": {
+          "const": "per_agent_home"
+        },
+        "forbid_user_home": {
+          "const": true
+        }
+      },
+      "patternProperties": {
+        "^x-": {}
+      }
+    },
+    "auth": {
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "login_with_coforge"
+        }
+      },
+      "patternProperties": {
+        "^x-": {}
+      }
+    },
+    "actions": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/action"
+      }
+    }
+  },
+  "patternProperties": {
+    "^x-": {}
+  },
+  "$defs": {
+    "action": {
+      "type": "object",
+      "required": [
+        "name",
+        "effect",
+        "endpoint",
+        "idempotency",
+        "required_scopes",
+        "input_schema"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._:-]{1,80}$"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "effect": {
+          "enum": [
+            "read",
+            "create",
+            "update",
+            "delete",
+            "external_side_effect"
+          ]
+        },
+        "endpoint": {
+          "type": "object",
+          "required": [
+            "method",
+            "path"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "method": {
+              "enum": [
+                "GET",
+                "POST",
+                "PUT",
+                "PATCH",
+                "DELETE"
+              ]
+            },
+            "path": {
+              "type": "string",
+              "pattern": "^/(?!/)[A-Za-z0-9._~!$&'()*+,;=:%/{}-]*$",
+              "maxLength": 512
+            }
+          },
+          "patternProperties": {
+            "^x-": {}
+          }
+        },
+        "idempotency": {
+          "enum": [
+            "safe",
+            "idempotent",
+            "key_required",
+            "non_idempotent"
+          ]
+        },
+        "idempotency_header": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9-]{1,64}$"
+        },
+        "required_scopes": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "openid",
+              "profile",
+              "identity",
+              "email"
+            ]
+          }
+        },
+        "input_schema": {
+          "$ref": "#/$defs/schemaNode"
+        },
+        "output_schema": {
+          "$ref": "#/$defs/schemaNode"
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "idempotency_header"
+          ],
+          "properties": {
+            "idempotency": {
+              "const": "key_required"
+            }
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "idempotency_header"
+            ]
+          },
+          "properties": {
+            "idempotency": {
+              "enum": [
+                "safe",
+                "idempotent",
+                "non_idempotent"
+              ]
+            }
+          }
+        }
+      ],
+      "patternProperties": {
+        "^x-": {}
+      }
+    },
+    "schemaNode": {
+      "type": "object",
+      "description": "A bounded JSON Schema subset. Also at most 12 levels deep, 256 nodes, 128 properties per object, 64 enum values.",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "enum": [
+            "string",
+            "integer",
+            "number",
+            "boolean",
+            "object",
+            "array",
+            "null"
+          ]
+        },
+        "properties": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/schemaNode"
+          }
+        },
+        "required": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "items": {
+          "$ref": "#/$defs/schemaNode"
+        },
+        "enum": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64
+        },
+        "const": {},
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "minimum": {
+          "type": "number"
+        },
+        "maximum": {
+          "type": "number"
+        },
+        "minLength": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "maxLength": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "minItems": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "maxItems": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "pattern": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "format": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "additionalProperties": {
+          "type": "boolean"
+        },
+        "default": {}
+      },
+      "patternProperties": {
+        "^x-": {}
+      }
+    }
+  }
+}
