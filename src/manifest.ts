@@ -81,8 +81,8 @@ export const actions: Action[] = [
 export function buildManifest(config: Pick<Config, "appOrigin">) {
   return {
     schema: "coforge-agent-manifest.v1",
-    name: "ship",
-    description: "A small notes service Agents can read from and write to.",
+    name: "Ship",
+    description: "Stores release notes per app version and locale, and lists an app's releases.",
     app_origin: config.appOrigin,
     execution: { mode: "http_api", base_url: `${config.appOrigin}${API_PREFIX}` },
     auth: { type: "login_with_coforge" },

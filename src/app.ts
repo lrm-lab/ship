@@ -15,6 +15,7 @@ import {
 } from "./manifest";
 import { coerceQuery, validate } from "./validate";
 
+const REALM = "ship";
 const MAX_BODY_BYTES = 64 * 1024;
 
 export type HandlerResponse = { status: ContentfulStatusCode; body: unknown };
@@ -33,21 +34,22 @@ function createHandlers(): Handlers {
   const forWorkspace = (id: string) => notes.get(id) ?? notes.set(id, new Map()).get(id)!;
   return {
     "notes.get": ({ id }: { id: string }, caller) => {
-      const note = forWorkspace(caller.workspaceId).get(id);
+      const note = forWorkspace(`${caller.issuer}\n${caller.workspaceId}`).get(id);
       return note
         ? { status: 200, body: note }
         : { status: 404, body: { error: "not_found", message: "No such note" } };
     },
     "notes.create": ({ title, body = "" }: { title: string; body?: string }, caller) => {
       const note = { id: randomUUID(), title, body };
-      forWorkspace(caller.workspaceId).set(note.id, note);
+      forWorkspace(`${caller.issuer}\n${caller.workspaceId}`).set(note.id, note);
       return { status: 201, body: note };
     },
   };
 }
 
 export type AppDeps = {
-  keys?: JWTVerifyGetKey;
+  /** Key sets by issuer, replacing the remote `<issuer>/jwks` ones (tests). */
+  keys?: Record<string, JWTVerifyGetKey>;
   actions?: Action[];
   handlers?: Handlers;
   idempotency?: ReturnType<typeof createIdempotencyStore>;
@@ -62,7 +64,7 @@ export function createApp(
     actions = defaultActions,
   }: AppDeps = {},
 ) {
-  const verify = createTokenVerifier(config, keys);
+  const verify = createTokenVerifier(config.trustedIssuers, keys);
   const app = new Hono();
 
   for (const action of actions) {
@@ -77,7 +79,7 @@ export function createApp(
   app.get("/healthz", (c) => c.json({ ok: true }));
 
   const challenge = (error: string, extra = "") =>
-    `Bearer realm="${config.issuer}", error="${error}"${extra}`;
+    `Bearer realm="${REALM}", error="${error}"${extra}`;
 
   for (const action of actions) {
     const route = `${API_PREFIX}${action.endpoint.path.replace(/\{(\w+)\}/g, ":$1")}`;
@@ -95,7 +97,7 @@ export function createApp(
         // 1. Authenticate: a valid Agent access token for this app.
         const token = /^Bearer ([^\s]+)$/i.exec(c.req.header("authorization") ?? "")?.[1];
         if (!token) {
-          c.header("WWW-Authenticate", `Bearer realm="${config.issuer}"`);
+          c.header("WWW-Authenticate", `Bearer realm="${REALM}"`);
           return c.json({ error: "unauthorized", message: "Bearer token required" }, 401);
         }
         let caller: Caller;
@@ -163,7 +165,7 @@ export function createApp(
               400,
             );
           }
-          scope = `${caller.workspaceId}\n${caller.agentId}\n${action.name}`;
+          scope = `${caller.issuer}\n${caller.workspaceId}\n${caller.agentId}\n${action.name}`;
           const seen = idempotency.begin(scope, key, input);
           if (seen.state === "conflict") {
             return c.json(

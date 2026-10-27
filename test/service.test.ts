@@ -1,53 +1,29 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import type { Hono } from "hono";
-import { SignJWT, createLocalJWKSet, exportJWK, generateKeyPair, type JWTVerifyGetKey } from "jose";
+import { generateKeyPair } from "jose";
 import { createApp } from "#src/app";
 import { loadConfig } from "#src/config";
 import { type Action } from "#src/manifest";
+import {
+  createTestIssuer,
+  signAgentToken,
+  type AgentTokenOptions,
+  type TestIssuer,
+} from "./support/issuers";
 
-const ISSUER = "https://coforge.example.com/oidc";
-const CLIENT_ID = "notes-service";
-const BASE = "https://notes.example.com";
-const config = loadConfig({
-  COFORGE_ISSUER: ISSUER,
-  COFORGE_CLIENT_ID: CLIENT_ID,
-  APP_ORIGIN: BASE,
-});
+const BASE = "https://ship.example.com";
 
 let app: Hono;
-let keys: JWTVerifyGetKey;
-let privateKey: CryptoKey;
+let issuerA: TestIssuer;
+let issuerB: TestIssuer;
 let otherKey: CryptoKey;
+let config: ReturnType<typeof loadConfig>;
 
-/** An Agent access token shaped like docs: RFC 9068, ES256, typ at+jwt, 5 minutes. */
-type TokenOverrides = {
-  iss?: string;
-  aud?: string;
-  sub?: string;
-  claims?: Record<string, unknown>;
-};
-async function token(
-  overrides: TokenOverrides = {},
-  { key = privateKey, typ = "at+jwt", expiresIn = "5m" as string | number } = {},
-) {
-  const claims = {
-    client_id: CLIENT_ID,
-    type: "agent",
-    workspace_id: "w1",
-    workspace_slug: "acme",
-    scope: "openid profile identity",
-    ...overrides.claims,
-  };
-  return new SignJWT(claims)
-    .setProtectedHeader({ alg: "ES256", kid: "k1", typ })
-    .setIssuer(overrides.iss ?? ISSUER)
-    .setAudience(overrides.aud ?? CLIENT_ID)
-    .setSubject(overrides.sub ?? "agent-1")
-    .setIssuedAt()
-    .setExpirationTime(expiresIn)
-    .setJti(crypto.randomUUID())
-    .sign(key);
-}
+/** An Agent access token of issuer A unless `issuer` says otherwise. */
+const token = (overrides: AgentTokenOptions = {}, issuer = issuerA) =>
+  signAgentToken(issuer, overrides);
+
+const keysByIssuer = () => ({ [issuerA.issuer]: issuerA.keySet, [issuerB.issuer]: issuerB.keySet });
 
 type CallOptions = {
   method?: string;
@@ -71,12 +47,18 @@ const call = async (
 
 describe("hosted HTTP action service", () => {
   beforeAll(async () => {
-    const pair = await generateKeyPair("ES256");
-    privateKey = pair.privateKey;
+    issuerA = await createTestIssuer("https://a.coforge.example/oidc", "ship-a");
+    issuerB = await createTestIssuer("https://b.coforge.example/oidc", "ship-b");
     otherKey = (await generateKeyPair("ES256")).privateKey;
-    const jwk = { ...(await exportJWK(pair.publicKey)), kid: "k1", alg: "ES256" };
-    keys = createLocalJWKSet({ keys: [jwk] });
-    app = createApp(config, { keys });
+    config = loadConfig({
+      SHIP_TRUSTED_ISSUERS: JSON.stringify([
+        { issuer: issuerA.issuer, clientId: issuerA.clientId },
+        { issuer: issuerB.issuer, clientId: issuerB.clientId },
+      ]),
+      APP_ORIGIN: BASE,
+      DATABASE_URL: "postgresql://unused@localhost:5432/unused",
+    });
+    app = createApp(config, { keys: keysByIssuer() });
   });
 
   test("publishes the manifest without authentication", async () => {
@@ -85,6 +67,7 @@ describe("hosted HTTP action service", () => {
     const manifest = await res.json();
     expect(manifest.schema).toBe("coforge-agent-manifest.v1");
     expect(manifest.execution.base_url).toBe(`${BASE}/api`);
+    expect(manifest.name).toBe("Ship");
   });
 
   describe("access token verification", () => {
@@ -95,13 +78,19 @@ describe("hosted HTTP action service", () => {
     });
 
     for (const [name, make] of [
-      ["wrong issuer", () => token({ iss: "https://evil.example/oidc" })],
+      ["from an issuer Ship does not trust", () => token({ iss: "https://evil.example/oidc" })],
       ["wrong audience", () => token({ aud: "another-app" })],
-      ["expired", () => token({}, { expiresIn: Math.floor(Date.now() / 1000) - 60 })],
-      ["signed by another key", () => token({}, { key: otherKey })],
-      ["not typ at+jwt", () => token({}, { typ: "JWT" })],
+      ["expired", () => token({ expiresIn: Math.floor(Date.now() / 1000) - 60 })],
+      ["signed by another key", () => token({ key: otherKey })],
+      ["not typ at+jwt", () => token({ typ: "JWT" })],
       ["not an Agent token", () => token({ claims: { type: "user" } })],
       ["no workspace", () => token({ claims: { workspace_id: undefined } })],
+      ["issued by B but carrying A's client ID", () => token({ aud: issuerA.clientId }, issuerB)],
+      ["claiming issuer A but signed by B's key", () => token({ key: issuerB.privateKey })],
+      [
+        "claiming issuer B with B's client ID but signed by A's key",
+        () => token({ key: issuerA.privateKey }, issuerB),
+      ],
     ] as [string, () => Promise<string>][]) {
       test(`rejects a token that is ${name}`, async () => {
         const res = await call("/api/notes/x", { bearer: await make() });
@@ -110,9 +99,34 @@ describe("hosted HTTP action service", () => {
       });
     }
 
-    test("rejects an unsigned (alg none) token", async () => {
+    test("accepts a valid token from each trusted issuer", async () => {
+      for (const issuer of [issuerA, issuerB]) {
+        const res = await call("/api/notes/x", { bearer: await token({}, issuer) });
+        expect(res.status).toBe(404); // authenticated; there is no such note
+        expect((await res.json()).error).toBe("not_found");
+      }
+    });
+
+    test("rejects tokens that are not decodable JWTs", async () => {
+      for (const bearer of ["abc", "a.b.c", "x".repeat(50)]) {
+        const res = await call("/api/notes/x", { bearer });
+        expect(res.status).toBe(401);
+        expect(res.headers.get("www-authenticate")).toMatch(/error="invalid_token"/);
+      }
+    });
+
+    test("rejects an unsigned (alg none) token naming a trusted issuer", async () => {
       const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString("base64url");
-      const forged = `${b64({ alg: "none", typ: "at+jwt" })}.${b64({ iss: ISSUER, aud: CLIENT_ID, sub: "a", type: "agent", workspace_id: "w1", scope: "openid", exp: 9999999999 })}.`;
+      const claims = {
+        iss: issuerA.issuer,
+        aud: issuerA.clientId,
+        sub: "a",
+        type: "agent",
+        workspace_id: "w1",
+        scope: "openid",
+        exp: 9999999999,
+      };
+      const forged = `${b64({ alg: "none", typ: "at+jwt" })}.${b64(claims)}.`;
       expect((await call("/api/notes/x", { bearer: forged })).status).toBe(401);
     });
   });
@@ -127,7 +141,7 @@ describe("hosted HTTP action service", () => {
       input_schema: { type: "object", properties: {}, additionalProperties: false },
     };
     const strict = createApp(config, {
-      keys,
+      keys: keysByIssuer(),
       actions: [emailAction],
       handlers: { "profile.email": () => ({ status: 200, body: {} }) },
     });
@@ -206,6 +220,20 @@ describe("hosted HTTP action service", () => {
     expect(await read.json()).toEqual(note);
   });
 
+  test("notes are private to the same Workspace id under another issuer", async () => {
+    const created = await call("/api/notes", {
+      method: "POST",
+      bearer: await token(),
+      body: { title: "issuer A only" },
+      headers: { "idempotency-key": "iss-1" },
+    });
+    const { id } = await created.json();
+    const same = await call(`/api/notes/${id}`, { bearer: await token() });
+    expect(same.status).toBe(200);
+    const other = await call(`/api/notes/${id}`, { bearer: await token({}, issuerB) });
+    expect(other.status).toBe(404);
+  });
+
   test("notes are private to a Workspace", async () => {
     const created = await call("/api/notes", {
       method: "POST",
@@ -259,7 +287,7 @@ describe("hosted HTTP action service", () => {
       let release: (value?: unknown) => void = () => {};
       const gate = new Promise((resolve) => (release = resolve));
       const a = createApp(config, {
-        keys,
+        keys: keysByIssuer(),
         actions: [{ ...base, name: "slow.run" }],
         handlers: {
           "slow.run": async () => ((runs += 1), await gate, { status: 201, body: { ran: runs } }),
@@ -280,7 +308,7 @@ describe("hosted HTTP action service", () => {
     test("a failed call releases its key so a retry can run", async () => {
       let runs = 0;
       const a = createApp(config, {
-        keys,
+        keys: keysByIssuer(),
         actions: [{ ...base, name: "slow.run" }],
         handlers: {
           "slow.run": async () =>
@@ -293,7 +321,7 @@ describe("hosted HTTP action service", () => {
 
     test("a body over the limit is refused, chunked or not", async () => {
       const a = createApp(config, {
-        keys,
+        keys: keysByIssuer(),
         actions: [{ ...base, name: "slow.run" }],
         handlers: { "slow.run": () => ({ status: 201, body: {} }) },
       });
@@ -321,7 +349,7 @@ describe("hosted HTTP action service", () => {
     test("GET query strings are coerced to the declared types", async () => {
       let seen: unknown;
       const a = createApp(config, {
-        keys,
+        keys: keysByIssuer(),
         actions: [
           {
             name: "q.get",
