@@ -1,5 +1,6 @@
 import type { HandlerContext, HandlerResponse, Handlers } from "./app";
 import { LIST_DEFAULT_LIMIT } from "./manifest";
+import { invalidInput } from "./responses";
 import { parseSemVer } from "./semver";
 import type { ReleaseChannel, ReleaseStore, StoredRelease } from "./store/release-store";
 
@@ -16,6 +17,39 @@ export const releaseBody = ({ app, version, channel, notes, updatedAt }: StoredR
   notes,
   updatedAt: updatedAt.toISOString(),
 });
+
+/**
+ * Trims each text and writes each locale in its canonical form (zh-cn becomes zh-CN), which the
+ * schema's pattern cannot do. Refuses a tag that is not a valid language tag and keys that are
+ * the same locale once canonical.
+ */
+function canonicalNotes(
+  notes: Record<string, string>,
+): { notes: Record<string, string> } | { problems: string[] } {
+  const canonical: Record<string, string> = {};
+  const sentAs = new Map<string, string>();
+  const problems: string[] = [];
+  for (const [locale, text] of Object.entries(notes)) {
+    let tag: string | undefined;
+    try {
+      tag = Intl.getCanonicalLocales(locale)[0];
+    } catch {
+      problems.push(`notes locale ${JSON.stringify(locale)} is not a valid language tag`);
+      continue;
+    }
+    if (tag === undefined) continue;
+    const earlier = sentAs.get(tag);
+    if (earlier !== undefined) {
+      problems.push(
+        `notes locales ${JSON.stringify(earlier)} and ${JSON.stringify(locale)} are both ${JSON.stringify(tag)} in canonical form`,
+      );
+      continue;
+    }
+    sentAs.set(tag, locale);
+    canonical[tag] = text.trim();
+  }
+  return problems.length > 0 ? { problems } : { notes: canonical };
+}
 
 const notFound = (): HandlerResponse => ({
   status: 404,
@@ -44,10 +78,10 @@ export function createReleaseHandlers(
       { orgId, agentId }: HandlerContext,
     ) => {
       if (!orgId) throw new Error("A write reached its handler without an org");
-      // The schema has checked the version and the notes; only trimming is left.
-      const notes = Object.fromEntries(
-        Object.entries(input.notes).map(([locale, text]) => [locale, text.trim()]),
-      );
+      // The schema has checked the version and the notes; what is left is trimming and canonical locales.
+      const canonical = canonicalNotes(input.notes);
+      if ("problems" in canonical) return invalidInput(canonical.problems);
+      const notes = canonical.notes;
       const release = await store.putNotes({
         orgId,
         app: input.app,

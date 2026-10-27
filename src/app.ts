@@ -11,6 +11,7 @@ import {
   buildManifest,
   type Action,
 } from "./manifest";
+import { invalidInput } from "./responses";
 import { publicReleaseUrl, registerPublicRoutes } from "./public-routes";
 import { createReleaseHandlers } from "./releases";
 import type { ReleaseStore } from "./store/release-store";
@@ -140,8 +141,10 @@ export function createApp(
           input = { ...(body as Record<string, unknown>), ...input };
         }
         const problems = validate(action.input_schema, input);
-        if (problems.length > 0)
-          return c.json({ error: "invalid_input", message: "Input is invalid", problems }, 400);
+        if (problems.length > 0) {
+          const refused = invalidInput(problems);
+          return c.json(refused.body, refused.status);
+        }
 
         // 4. Resolve the tenant: the caller's org. A read only looks it up, so reading never
         //    creates an org; a write creates it on the Workspace's first call.

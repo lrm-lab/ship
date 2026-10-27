@@ -125,6 +125,34 @@ describe("releases.notes.put and releases.notes.get", () => {
     expect(Object.keys(again.notes)).toEqual(["de", "en", "fr", "zh-CN"]);
   });
 
+  test("locale keys are stored in canonical form: zh-cn becomes zh-CN", async () => {
+    const put = await (
+      await putNotes("canon", "1.0.0", { "zh-cn": "z", "zh-hans-cn": "h", en: "e", iw: "i" })
+    ).json();
+    expect(Object.keys(put.notes)).toEqual(["en", "he", "zh-CN", "zh-Hans-CN"]);
+    const got = await (await getNotes("canon", "1.0.0")).json();
+    expect(got.notes).toEqual(put.notes);
+    const listed = await (await call("/api/apps/canon/releases")).json();
+    expect(listed.releases[0].locales).toEqual(["en", "he", "zh-CN", "zh-Hans-CN"]);
+  });
+
+  test("keys that collide once canonical are refused with a clear problem; so is a malformed tag", async () => {
+    for (const notes of [
+      { "zh-cn": "a", "zh-CN": "b" },
+      { iw: "a", he: "b" },
+    ]) {
+      const res = await putNotes("collide", "1.0.0", notes);
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toBe("invalid_input");
+      expect(body.problems.join(" ")).toMatch(/both .* canonical/);
+    }
+    const malformed = await putNotes("collide", "1.0.0", { "en-us-us": "a" });
+    expect(malformed.status).toBe(400);
+    expect((await malformed.json()).problems.join(" ")).toContain("en-us-us");
+    expect((await getNotes("collide", "1.0.0")).status).toBe(404); // nothing was stored
+  });
+
   test("a version without a prerelease part is on the stable channel", async () => {
     const res = await putNotes("chan", "1.2.3+build.5", { en: "x" });
     expect((await res.json()).channel).toBe("stable");

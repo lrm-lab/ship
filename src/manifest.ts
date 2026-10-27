@@ -58,7 +58,7 @@ const version = VERSION_SCHEMA;
 const NOTES_SCHEMA: Schema = {
   type: "object",
   description:
-    'Markdown by locale, such as {"en": "...", "zh-CN": "..."}. 1 to 20 locales; a locale is a language tag such as en or zh-CN; each text has 1 to 16000 characters and some non-whitespace. Ship trims each text before storing it.',
+    'Markdown by locale, such as {"en": "...", "zh-CN": "..."}. 1 to 20 locales; a locale is a language tag such as en or zh-CN, stored in canonical form (zh-cn becomes zh-CN), and two keys that are the same locale are refused. Each text has 1 to 16000 characters as sent, with some non-whitespace; it is trimmed when stored.',
   minProperties: 1,
   maxProperties: 20,
   propertyNames: { pattern: "^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$" },
