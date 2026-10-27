@@ -122,6 +122,19 @@ describe("releases.notes.put and releases.notes.get", () => {
     expect((await (await getNotes("overwrite", "1.0.0")).json()).notes).toEqual({ en: "uno" });
   });
 
+  test("reading from a Workspace that has no org creates none; the first write does", async () => {
+    const who = { workspace: "w-read-only" };
+    const orgs = () => database.client.org.count({ where: { workspaceId: "w-read-only" } });
+    expect((await getNotes("fresh", "1.0.0", who)).status).toBe(404);
+    const listed = await call("/api/apps/fresh/releases", { who });
+    expect(listed.status).toBe(200);
+    expect(await listed.json()).toEqual({ releases: [] });
+    expect(await orgs()).toBe(0);
+    expect((await putNotes("fresh", "1.0.0", { en: "x" }, who)).status).toBe(200);
+    expect(await orgs()).toBe(1);
+    expect((await getNotes("fresh", "1.0.0", who)).status).toBe(200);
+  });
+
   test("get of an unknown version or app is 404 not_found", async () => {
     const res = await getNotes("overwrite", "9.9.9");
     expect(res.status).toBe(404);

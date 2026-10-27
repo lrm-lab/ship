@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { channelOf } from "#src/releases";
 import { createDatabase, type Database } from "#src/store/database";
 import { createPrismaReleaseStore } from "#src/store/prisma-release-store";
 import type { ReleaseStore } from "#src/store/release-store";
@@ -24,7 +25,7 @@ const put = (orgId: string, version: string, notes: Record<string, string>, agen
     orgId,
     app: "demo",
     version,
-    channel: version.includes("-") ? "dev" : "stable",
+    channel: channelOf(version),
     agentId,
     notes,
   });
@@ -55,6 +56,29 @@ describe("orgs", () => {
     for (let i = 0; i < 3; i++) expect(await store.ensureOrg(key)).toBe(orgId);
     const after = await database.client.org.findUniqueOrThrow({ where: { id: orgId } });
     expect(after.updatedAt.getTime()).toBe(before.updatedAt.getTime());
+  });
+
+  test("findOrg answers null for an unknown Workspace and creates nothing", async () => {
+    const key = { issuer: "https://a.example/oidc", workspaceId: "w-find" };
+    expect(await store.findOrg(key)).toBeNull();
+    expect(await database.client.org.count({ where: key })).toBe(0);
+    const orgId = await store.ensureOrg(key);
+    expect(await store.findOrg(key)).toBe(orgId);
+  });
+
+  test("an unknown Workspace is not remembered: an org created elsewhere is found next time", async () => {
+    const key = { issuer: "https://a.example/oidc", workspaceId: "w-late" };
+    expect(await store.findOrg(key)).toBeNull();
+    const created = await database.client.org.create({ data: key, select: { id: true } });
+    expect(await store.findOrg(key)).toBe(created.id);
+  });
+
+  test("a known org is remembered, so later lookups need no query", async () => {
+    const key = { issuer: "https://a.example/oidc", workspaceId: "w-cache" };
+    const orgId = await store.ensureOrg(key);
+    await database.client.org.delete({ where: { id: orgId } }); // orgs are never deleted in practice
+    expect(await store.findOrg(key)).toBe(orgId);
+    expect(await store.ensureOrg(key)).toBe(orgId);
   });
 
   test("concurrent first calls from one Workspace create one org", async () => {
@@ -114,7 +138,7 @@ describe("release notes", () => {
     const b = await store.ensureOrg({ issuer: "https://b.example/oidc", workspaceId: "w-iso" });
     await put(a, "1.0.0", { en: "secret" });
     expect(await store.getRelease(b, "demo", "1.0.0")).toBeNull();
-    expect(await store.listReleases(b, "demo")).toEqual([]);
+    expect(await store.listReleases(b, "demo", { limit: 20 })).toEqual([]);
   });
 
   test("a concurrent put of the same version leaves one consistent set", async () => {
@@ -138,30 +162,45 @@ describe("release notes", () => {
 });
 
 describe("listReleases", () => {
-  test("lists an app's releases with their locales, optionally for one channel", async () => {
+  test("lists an app's releases newest first by SemVer, limited, optionally for one channel", async () => {
     const orgId = await store.ensureOrg({
       issuer: "https://a.example/oidc",
       workspaceId: "w-list",
     });
-    await put(orgId, "1.0.0", { en: "a", "zh-CN": "b" });
-    await put(orgId, "1.1.0-dev.1", { en: "c" });
+    for (const version of [
+      "1.0.0",
+      "1.10.0",
+      "1.2.0",
+      "1.3.0-dev.1",
+      "1.3.0-dev.10",
+      "1.3.0-dev.9",
+    ]) {
+      await put(orgId, version, { en: "a", "zh-CN": "b" });
+    }
     await store.putNotes({
       orgId,
       app: "elsewhere",
-      version: "1.0.0",
+      version: "9.0.0",
       channel: "stable",
       agentId: "a",
       notes: { en: "z" },
     });
 
-    const all = await store.listReleases(orgId, "demo");
-    expect(all.map((r) => r.version).sort()).toEqual(["1.0.0", "1.1.0-dev.1"]);
-    expect(all.find((r) => r.version === "1.0.0")).toMatchObject({
-      channel: "stable",
-      locales: ["en", "zh-CN"],
-    });
-
-    const dev = await store.listReleases(orgId, "demo", "dev");
-    expect(dev.map((r) => r.version)).toEqual(["1.1.0-dev.1"]);
+    const all = await store.listReleases(orgId, "demo", { limit: 20 });
+    expect(all.map((r) => r.version)).toEqual([
+      "1.10.0",
+      "1.3.0-dev.10",
+      "1.3.0-dev.9",
+      "1.3.0-dev.1",
+      "1.2.0",
+      "1.0.0",
+    ]);
+    expect(all[0]).toMatchObject({ channel: "stable", locales: ["en", "zh-CN"] });
+    expect((await store.listReleases(orgId, "demo", { limit: 2 })).map((r) => r.version)).toEqual([
+      "1.10.0",
+      "1.3.0-dev.10",
+    ]);
+    const dev = await store.listReleases(orgId, "demo", { channel: "dev", limit: 20 });
+    expect(dev.map((r) => r.version)).toEqual(["1.3.0-dev.10", "1.3.0-dev.9", "1.3.0-dev.1"]);
   });
 });

@@ -31,13 +31,17 @@ export type PutNotesInput = {
   notes: ReleaseNotes;
 };
 
+export type ListReleasesOptions = { channel?: ReleaseChannel; limit: number };
+
 /** Everything Ship keeps. Every release belongs to an org: a query never crosses orgs. */
 export interface ReleaseStore {
-  /** The id of the org of this Workspace, created on first use. */
+  /** The id of this Workspace's org, or null when it has none. Creates nothing. */
+  findOrg(key: OrgKey): Promise<string | null>;
+  /** The id of this Workspace's org, created on first use. */
   ensureOrg(key: OrgKey): Promise<string>;
   /** Creates the release or updates it, and replaces its whole set of notes. */
   putNotes(input: PutNotesInput): Promise<StoredRelease>;
   getRelease(orgId: string, app: string, version: string): Promise<StoredRelease | null>;
-  /** Every release of the app (in no particular order), optionally of one channel. */
-  listReleases(orgId: string, app: string, channel?: ReleaseChannel): Promise<ReleaseSummary[]>;
+  /** The app's releases, newest first by SemVer precedence, at most `limit`, optionally of one channel. */
+  listReleases(orgId: string, app: string, options: ListReleasesOptions): Promise<ReleaseSummary[]>;
 }

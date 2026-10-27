@@ -1,9 +1,9 @@
 import { Hono } from "hono";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { bodyLimit } from "hono/body-limit";
 import type { JWTVerifyGetKey } from "jose";
 import { createTokenVerifier, missingScopes, type Caller } from "./auth";
 import type { Config } from "./config";
-import type { Handlers } from "./handler";
 import {
   API_PREFIX,
   MANIFEST_PATH,
@@ -11,7 +11,7 @@ import {
   buildManifest,
   type Action,
 } from "./manifest";
-import { registerPublicRoutes } from "./public-routes";
+import { publicReleaseUrl, registerPublicRoutes } from "./public-routes";
 import { createReleaseHandlers } from "./releases";
 import type { ReleaseStore } from "./store/release-store";
 import { coerceQuery, validate } from "./validate";
@@ -21,11 +21,22 @@ const REALM = "ship";
 // Agent CLI's own cap on a request body.
 const MAX_BODY_BYTES = 1024 * 1024;
 
+/** The caller, and the org the pipeline resolved for it: null for a read by a Workspace with no org yet. */
+export type HandlerContext = Caller & { orgId: string | null };
+export type HandlerResponse = { status: ContentfulStatusCode; body: unknown };
+/** What an action does: it receives validated input and the context, and returns { status, body }. */
+export type Handler = (
+  input: any,
+  context: HandlerContext,
+) => HandlerResponse | Promise<HandlerResponse>;
+/** The handlers by action name; createApp refuses to boot if one is missing. */
+export type Handlers = Record<string, Handler>;
+
 export type AppDeps = {
   /** Key sets by issuer, replacing the remote `<issuer>/jwks` ones (tests). */
   keys?: Record<string, JWTVerifyGetKey>;
-  /** Where releases are kept. Required unless `handlers` replaces the release handlers. */
-  store?: ReleaseStore;
+  /** Where releases and orgs are kept. */
+  store: ReleaseStore;
   actions?: Action[];
   handlers?: Handlers;
 };
@@ -35,9 +46,11 @@ export function createApp(
   {
     keys,
     store,
-    handlers = store ? createReleaseHandlers(store, config.appOrigin) : {},
+    handlers = createReleaseHandlers(store, (orgId, { app, version }) =>
+      publicReleaseUrl(config.appOrigin, orgId, app, version),
+    ),
     actions = defaultActions,
-  }: AppDeps = {},
+  }: AppDeps,
 ) {
   const verify = createTokenVerifier(config.trustedIssuers, keys);
   const app = new Hono();
@@ -52,7 +65,7 @@ export function createApp(
     return c.json(buildManifest(config, actions));
   });
   app.get("/healthz", (c) => c.json({ ok: true }));
-  if (store) registerPublicRoutes(app, store);
+  registerPublicRoutes(app, store);
 
   const challenge = (error: string, extra = "") =>
     `Bearer realm="${REALM}", error="${error}"${extra}`;
@@ -129,7 +142,13 @@ export function createApp(
         if (problems.length > 0)
           return c.json({ error: "invalid_input", message: "Input is invalid", problems }, 400);
 
-        const response = await handlers[action.name]!(input, caller);
+        // 4. Resolve the tenant: the caller's org. A read only looks it up, so reading never
+        //    creates an org; a write creates it on the Workspace's first call.
+        const orgKey = { issuer: caller.issuer, workspaceId: caller.workspaceId };
+        const orgId =
+          action.effect === "read" ? await store.findOrg(orgKey) : await store.ensureOrg(orgKey);
+
+        const response = await handlers[action.name]!(input, { ...caller, orgId });
         return c.json(response.body as never, response.status);
       },
     );

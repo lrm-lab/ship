@@ -4,7 +4,7 @@ import { generateKeyPair } from "jose";
 import { createApp } from "#src/app";
 import { loadConfig } from "#src/config";
 import { buildManifest, type Action } from "#src/manifest";
-import type { ReleaseStore } from "#src/store/release-store";
+import type { OrgKey, ReleaseStore } from "#src/store/release-store";
 import {
   createTestIssuer,
   signAgentToken,
@@ -19,10 +19,28 @@ let issuerA: TestIssuer;
 let issuerB: TestIssuer;
 let otherKey: CryptoKey;
 let config: ReturnType<typeof loadConfig>;
+let orgs: ReturnType<typeof fakeStore>;
 
 /** An Agent access token of issuer A unless `issuer` says otherwise. */
 const token = (overrides: AgentTokenOptions = {}, issuer = issuerA) =>
   signAgentToken(issuer, overrides);
+
+/** A store that knows orgs only, and records how the pipeline asked for them. */
+function fakeStore(known: Record<string, string> = {}) {
+  const calls: string[] = [];
+  const store = {
+    calls,
+    findOrg: async ({ issuer, workspaceId }: OrgKey) => {
+      calls.push(`find ${workspaceId}`);
+      return known[`${issuer} ${workspaceId}`] ?? null;
+    },
+    ensureOrg: async ({ issuer, workspaceId }: OrgKey) => {
+      calls.push(`ensure ${workspaceId}`);
+      return (known[`${issuer} ${workspaceId}`] ??= `org-of-${workspaceId}`);
+    },
+  };
+  return store as typeof store & ReleaseStore;
+}
 
 /** Stand-ins for the release actions, so this file tests the generic machinery on its own. */
 const whoami: Action = {
@@ -52,10 +70,15 @@ const echo: Action = {
 const testHandlers = {
   "test.whoami": (
     _input: unknown,
-    caller: { issuer: string; workspaceId: string; agentId: string },
+    caller: { issuer: string; workspaceId: string; agentId: string; orgId: string | null },
   ) => ({
     status: 200 as const,
-    body: { issuer: caller.issuer, workspaceId: caller.workspaceId, agentId: caller.agentId },
+    body: {
+      issuer: caller.issuer,
+      workspaceId: caller.workspaceId,
+      agentId: caller.agentId,
+      orgId: caller.orgId,
+    },
   }),
   "test.echo": ({ title, body = "" }: { title: string; body?: string }) => ({
     status: 201 as const,
@@ -98,7 +121,9 @@ describe("hosted HTTP action service", () => {
       APP_ORIGIN: BASE,
       DATABASE_URL: "postgresql://unused@localhost:5432/unused",
     });
+    orgs = fakeStore({ [`${issuerB.issuer} w9`]: "org-9" });
     app = createApp(config, {
+      store: orgs,
       keys: keysByIssuer(),
       actions: [whoami, echo],
       handlers: testHandlers,
@@ -106,7 +131,7 @@ describe("hosted HTTP action service", () => {
   });
 
   test("publishes the manifest without authentication", async () => {
-    const withReleases = createApp(config, { keys: keysByIssuer(), store: {} as ReleaseStore });
+    const withReleases = createApp(config, { keys: keysByIssuer(), store: fakeStore() });
     const res = await withReleases.request(`${BASE}/.well-known/coforge-agent-manifest.json`);
     expect(res.status).toBe(200);
     const manifest = await res.json();
@@ -186,6 +211,7 @@ describe("hosted HTTP action service", () => {
       input_schema: { type: "object", properties: {}, additionalProperties: false },
     };
     const strict = createApp(config, {
+      store: fakeStore(),
       keys: keysByIssuer(),
       actions: [emailAction],
       handlers: { "profile.email": () => ({ status: 200, body: {} }) },
@@ -228,7 +254,7 @@ describe("hosted HTTP action service", () => {
     expect(await res.json()).toMatchObject({ title: "Hello", body: "world" });
   });
 
-  test("the caller is the issuer, Workspace and Agent of the token", async () => {
+  test("the caller is the issuer, Workspace and Agent of the token, with the org of its Workspace", async () => {
     const res = await call("/api/whoami", {
       bearer: await token({ sub: "agent-7", claims: { workspace_id: "w9" } }, issuerB),
     });
@@ -236,6 +262,47 @@ describe("hosted HTTP action service", () => {
       issuer: issuerB.issuer,
       workspaceId: "w9",
       agentId: "agent-7",
+      orgId: "org-9",
+    });
+  });
+
+  describe("the pipeline resolves the org once, before the handler", () => {
+    const callsFor = async (run: () => Promise<Response>) => {
+      orgs.calls.length = 0;
+      await run();
+      return [...orgs.calls];
+    };
+
+    test("a read only looks the org up, and a Workspace without one gets orgId null", async () => {
+      const bearer = await token({ claims: { workspace_id: "w-new" } });
+      let body: { orgId: string | null } | undefined;
+      const calls = await callsFor(async () => {
+        const res = await call("/api/whoami", { bearer });
+        body = await res.json();
+        return res;
+      });
+      expect(calls).toEqual(["find w-new"]);
+      expect(body?.orgId).toBeNull();
+    });
+
+    test("a write creates the org", async () => {
+      const bearer = await token({ claims: { workspace_id: "w-write" } });
+      let body: unknown;
+      const calls = await callsFor(async () => {
+        const res = await call("/api/echo", { method: "POST", bearer, body: { title: "t" } });
+        body = await res.json();
+        return res;
+      });
+      expect(calls).toEqual(["ensure w-write"]);
+      expect(body).toMatchObject({ title: "t" });
+    });
+
+    test("nothing is resolved for a call that is refused before its handler", async () => {
+      const bearer = await token({ claims: { workspace_id: "w-refused" } });
+      expect(
+        await callsFor(() => call("/api/echo", { method: "POST", bearer, body: { title: "" } })),
+      ).toEqual([]);
+      expect(await callsFor(() => call("/api/whoami", { bearer: "garbage" }))).toEqual([]);
     });
   });
 
@@ -273,6 +340,7 @@ describe("hosted HTTP action service", () => {
 
     test("a body over the limit is refused, chunked or not", async () => {
       const a = createApp(config, {
+        store: fakeStore(),
         keys: keysByIssuer(),
         actions: [{ ...base, name: "slow.run" }],
         handlers: { "slow.run": () => ({ status: 201, body: {} }) },
@@ -300,6 +368,7 @@ describe("hosted HTTP action service", () => {
     test("GET query strings are coerced to the declared types", async () => {
       let seen: unknown;
       const a = createApp(config, {
+        store: fakeStore(),
         keys: keysByIssuer(),
         actions: [
           {

@@ -1,6 +1,6 @@
 import type { Hono } from "hono";
 import { APP_SCHEMA, VERSION_SCHEMA } from "./manifest";
-import { releaseBody } from "./release-body";
+import { releaseBody } from "./releases";
 import type { ReleaseStore } from "./store/release-store";
 import { validate, type Schema } from "./validate";
 
@@ -17,6 +17,17 @@ const PARAMS_SCHEMA: Schema = {
     version: VERSION_SCHEMA,
   },
   required: ["orgId", "app", "version"],
+};
+
+/** Where a release's notes are public: the route above with its parameters filled in. */
+export const publicReleaseUrl = (
+  appOrigin: string,
+  orgId: string,
+  app: string,
+  version: string,
+) => {
+  const params: Record<string, string> = { orgId, app, version };
+  return `${appOrigin}${PUBLIC_RELEASE_PATH.replace(/:(\w+)/g, (_, name: string) => encodeURIComponent(params[name] as string))}`;
 };
 
 /**

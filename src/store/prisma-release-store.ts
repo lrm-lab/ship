@@ -1,25 +1,48 @@
-import type { PrismaClient } from "#src/generated/prisma/client";
-import type { ReleaseChannel, ReleaseNotes, ReleaseStore, StoredRelease } from "./release-store";
-
-const compareLocale = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+import { Prisma, type PrismaClient } from "#src/generated/prisma/client";
+import { compareVersions } from "#src/semver";
+import type { OrgKey, ReleaseNotes, ReleaseStore, StoredRelease } from "./release-store";
 
 function toNotes(rows: { locale: string; body: string }[]): ReleaseNotes {
   return Object.fromEntries(rows.map((row) => [row.locale, row.body]));
 }
 
 export function createPrismaReleaseStore(db: PrismaClient): ReleaseStore {
-  return {
-    async ensureOrg({ issuer, workspaceId }) {
-      const where = { issuer_workspaceId: { issuer, workspaceId } };
-      // Read first: almost every call finds the org, and a read writes nothing.
-      const existing = await db.org.findUnique({ where, select: { id: true } });
-      if (existing) return existing.id;
+  // Orgs are never deleted, so an id found or created stays right. Only hits are remembered:
+  // a Workspace without an org may get one from another instance at any moment.
+  const orgIds = new Map<string, string>();
+  const remember = ({ issuer, workspaceId }: OrgKey, id: string) => {
+    orgIds.set(`${issuer}\n${workspaceId}`, id);
+    return id;
+  };
+
+  const store: ReleaseStore = {
+    async findOrg(key) {
+      const known = orgIds.get(`${key.issuer}\n${key.workspaceId}`);
+      if (known) return known;
+      const org = await db.org.findUnique({
+        where: { issuer_workspaceId: { issuer: key.issuer, workspaceId: key.workspaceId } },
+        select: { id: true },
+      });
+      return org ? remember(key, org.id) : null;
+    },
+
+    async ensureOrg(key) {
+      const existing = await store.findOrg(key);
+      if (existing) return existing;
       try {
-        return (await db.org.create({ data: { issuer, workspaceId }, select: { id: true } })).id;
+        const org = await db.org.create({
+          data: { issuer: key.issuer, workspaceId: key.workspaceId },
+          select: { id: true },
+        });
+        return remember(key, org.id);
       } catch (error) {
         // Another first call created it between our read and our insert (unique violation).
-        if ((error as { code?: string }).code !== "P2002") throw error;
-        return (await db.org.findUniqueOrThrow({ where, select: { id: true } })).id;
+        if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") {
+          throw error;
+        }
+        const created = await store.findOrg(key);
+        if (!created) throw error;
+        return created;
       }
     },
 
@@ -40,18 +63,15 @@ export function createPrismaReleaseStore(db: PrismaClient): ReleaseStore {
           update: { channel, updatedByAgentId: agentId },
           select: { id: true, updatedAt: true },
         });
-        const locales = Object.keys(notes);
-        await tx.releaseNote.deleteMany({
-          where: { releaseId: release.id, locale: { notIn: locales } },
+        await tx.releaseNote.deleteMany({ where: { releaseId: release.id } });
+        await tx.releaseNote.createMany({
+          data: Object.entries(notes).map(([locale, body]) => ({
+            releaseId: release.id,
+            locale,
+            body,
+          })),
         });
-        for (const locale of locales) {
-          await tx.releaseNote.upsert({
-            where: { releaseId_locale: { releaseId: release.id, locale } },
-            create: { releaseId: release.id, locale, body: notes[locale] as string },
-            update: { body: notes[locale] as string },
-          });
-        }
-        return { app, version, channel, notes: { ...notes }, updatedAt: release.updatedAt };
+        return { app, version, channel, notes, updatedAt: release.updatedAt };
       });
     },
 
@@ -70,17 +90,26 @@ export function createPrismaReleaseStore(db: PrismaClient): ReleaseStore {
       };
     },
 
-    async listReleases(orgId, app, channel?: ReleaseChannel) {
+    async listReleases(orgId, app, { channel, limit }) {
+      // SemVer precedence is not a SQL ordering, so the app's releases are sorted here. Fine
+      // while an app has hundreds of versions; store a sort key if it ever has many more.
       const releases = await db.release.findMany({
-        where: { orgId, app, ...(channel ? { channel } : {}) },
-        include: { notes: { select: { locale: true } } },
+        where: { orgId, app, ...(channel && { channel }) },
+        select: {
+          version: true,
+          channel: true,
+          updatedAt: true,
+          notes: { select: { locale: true } },
+        },
       });
-      return releases.map((release) => ({
-        version: release.version,
-        channel: release.channel,
-        locales: release.notes.map((note) => note.locale).sort(compareLocale),
-        updatedAt: release.updatedAt,
-      }));
+      return releases
+        .sort((a, b) => compareVersions(b.version, a.version))
+        .slice(0, limit)
+        .map(({ notes, ...release }) => ({
+          ...release,
+          locales: notes.map((note) => note.locale).sort(),
+        }));
     },
   };
+  return store;
 }
