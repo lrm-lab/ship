@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { Prisma } from "#src/generated/prisma/client";
 import { channelOf } from "#src/releases";
 import { createDatabase, type Database } from "#src/store/database";
 import { createPrismaReleaseStore } from "#src/store/prisma-release-store";
@@ -92,6 +93,87 @@ describe("orgs", () => {
 });
 
 describe("release notes", () => {
+  test("concurrent first puts of a brand new version all succeed, over several rounds", async () => {
+    const orgId = await store.ensureOrg({
+      issuer: "https://a.example/oidc",
+      workspaceId: "w-first",
+    });
+    for (let round = 0; round < 8; round++) {
+      const version = `5.${round}.0`;
+      const results = await Promise.allSettled(
+        Array.from({ length: 12 }, (_, i) =>
+          put(orgId, version, { en: `writer ${i}` }, `agent-${i}`),
+        ),
+      );
+      expect(results.filter((r) => r.status === "rejected")).toEqual([]);
+      const stored = await store.getRelease(orgId, "demo", version);
+      expect(Object.keys(stored?.notes ?? {})).toEqual(["en"]);
+      expect(await database.client.release.count({ where: { orgId, version } })).toBe(1);
+    }
+  });
+
+  test("a put that loses a unique-violation race on the release is retried once", async () => {
+    // Prisma's upsert is a native ON CONFLICT here, so the race cannot be provoked; make the
+    // first upsert of the release fail the way a lost race does.
+    const violation = () =>
+      new Prisma.PrismaClientKnownRequestError("Unique constraint failed", {
+        code: "P2002",
+        clientVersion: "test",
+      });
+    const flaky = (failures: number) =>
+      new Proxy(database.client, {
+        get(target, name) {
+          if (name !== "$transaction") return Reflect.get(target, name);
+          return (run: (tx: unknown) => Promise<unknown>) =>
+            target.$transaction((tx) =>
+              run(
+                new Proxy(tx, {
+                  get(inner, model) {
+                    if (model !== "release") return Reflect.get(inner, model);
+                    return new Proxy(inner.release, {
+                      get(delegate, method) {
+                        if (method === "upsert" && failures-- > 0)
+                          return () => Promise.reject(violation());
+                        return Reflect.get(delegate, method);
+                      },
+                    });
+                  },
+                }),
+              ),
+            );
+        },
+      });
+    const orgId = await store.ensureOrg({
+      issuer: "https://a.example/oidc",
+      workspaceId: "w-retry",
+    });
+    const input = {
+      orgId,
+      app: "demo",
+      version: "6.0.0",
+      channel: "stable" as const,
+      agentId: "a",
+      notes: { en: "x" },
+    };
+    const once = await createPrismaReleaseStore(flaky(1)).putNotes(input);
+    expect(once.notes).toEqual({ en: "x" });
+    expect(await store.getRelease(orgId, "demo", "6.0.0")).toMatchObject({ notes: { en: "x" } });
+    // a second failure is not swallowed
+    await expect(
+      createPrismaReleaseStore(flaky(2)).putNotes({ ...input, version: "6.0.1" }),
+    ).rejects.toThrow();
+    // another kind of error is not retried
+    let calls = 0;
+    const broken = new Proxy(database.client, {
+      get(target, name) {
+        if (name !== "$transaction") return Reflect.get(target, name);
+        return () => (calls++, Promise.reject(new Error("database down")));
+      },
+    });
+    await expect(createPrismaReleaseStore(broken).putNotes(input)).rejects.toThrow("database down");
+    expect(calls).toBe(1);
+  });
+
   test("a concurrent put of the same version leaves one consistent set", async () => {
     const orgId = await store.ensureOrg({
       issuer: "https://a.example/oidc",

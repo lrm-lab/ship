@@ -1,6 +1,15 @@
 import { Prisma, type PrismaClient } from "#src/generated/prisma/client";
 import { compareVersions } from "#src/semver";
-import type { OrgKey, ReleaseNotes, ReleaseStore, StoredRelease } from "./release-store";
+import type {
+  OrgKey,
+  PutNotesInput,
+  ReleaseNotes,
+  ReleaseStore,
+  StoredRelease,
+} from "./release-store";
+
+const isUniqueViolation = (error: unknown) =>
+  error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
 
 function toNotes(rows: { locale: string; body: string }[]): ReleaseNotes {
   return Object.fromEntries(rows.map((row) => [row.locale, row.body]));
@@ -14,6 +23,34 @@ export function createPrismaReleaseStore(db: PrismaClient): ReleaseStore {
     orgIds.set(`${issuer}\n${workspaceId}`, id);
     return id;
   };
+
+  const writeNotes = ({ orgId, app, version, channel, agentId, notes }: PutNotesInput) =>
+    db.$transaction(async (tx) => {
+      // Upserting the release first takes its row lock, so concurrent puts of one version
+      // are applied one after the other, each replacing the whole set.
+      const release = await tx.release.upsert({
+        where: { orgId_app_version: { orgId, app, version } },
+        create: {
+          orgId,
+          app,
+          version,
+          channel,
+          createdByAgentId: agentId,
+          updatedByAgentId: agentId,
+        },
+        update: { channel, updatedByAgentId: agentId },
+        select: { id: true, updatedAt: true },
+      });
+      await tx.releaseNote.deleteMany({ where: { releaseId: release.id } });
+      await tx.releaseNote.createMany({
+        data: Object.entries(notes).map(([locale, body]) => ({
+          releaseId: release.id,
+          locale,
+          body,
+        })),
+      });
+      return { app, version, channel, notes, updatedAt: release.updatedAt };
+    });
 
   const store: ReleaseStore = {
     async findOrg(key) {
@@ -37,42 +74,22 @@ export function createPrismaReleaseStore(db: PrismaClient): ReleaseStore {
         return remember(key, org.id);
       } catch (error) {
         // Another first call created it between our read and our insert (unique violation).
-        if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") {
-          throw error;
-        }
+        if (!isUniqueViolation(error)) throw error;
         const created = await store.findOrg(key);
         if (!created) throw error;
         return created;
       }
     },
 
-    putNotes({ orgId, app, version, channel, agentId, notes }) {
-      return db.$transaction(async (tx) => {
-        // Upserting the release first takes its row lock, so concurrent puts of one version
-        // are applied one after the other, each replacing the whole set.
-        const release = await tx.release.upsert({
-          where: { orgId_app_version: { orgId, app, version } },
-          create: {
-            orgId,
-            app,
-            version,
-            channel,
-            createdByAgentId: agentId,
-            updatedByAgentId: agentId,
-          },
-          update: { channel, updatedByAgentId: agentId },
-          select: { id: true, updatedAt: true },
-        });
-        await tx.releaseNote.deleteMany({ where: { releaseId: release.id } });
-        await tx.releaseNote.createMany({
-          data: Object.entries(notes).map(([locale, body]) => ({
-            releaseId: release.id,
-            locale,
-            body,
-          })),
-        });
-        return { app, version, channel, notes, updatedAt: release.updatedAt };
-      });
+    async putNotes(input) {
+      try {
+        return await writeNotes(input);
+      } catch (error) {
+        // Two first puts of a new version can both try to create the release. The loser's
+        // transaction is void, so run it again: the release now exists and its row lock orders them.
+        if (!isUniqueViolation(error)) throw error;
+        return writeNotes(input);
+      }
     },
 
     async getRelease(orgId, app, version): Promise<StoredRelease | null> {
