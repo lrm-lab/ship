@@ -21,8 +21,12 @@ Ship is a CoForge App (README.md): Hono on Bun, Prisma and PostgreSQL, JSON over
 - Imports inside the package use the `#src/` alias (`#src/store/database`), siblings use `./`; never write
   `../` into `src/`. Tests import the code through `#src/`.
 - `src/manifest.ts` actions are the single source of truth: `src/app.ts` builds routes, input validation, scope
-  checks from them (generic machinery, with `validate.ts`).
-  `src/releases.ts` has one handler per action; the service refuses to boot with an action lacking one.
+  checks from them (generic machinery, with `validate.ts`), then resolves the caller's org (`caller.orgId`: a
+  read only looks it up, a write creates it) before the handler. `src/releases.ts` has one handler per action;
+  the service refuses to boot with an action lacking one. Put every input rule in the action's schema:
+  `validate.ts` also understands `propertyNames`, `minProperties`, `maxProperties` and a schema-valued
+  `additionalProperties`, which CoForge's manifest subset forbids, so the published manifest carries them as
+  `x-` keys (`publishedSchema`).
 - `src/store/`: the `ReleaseStore` interface and its Prisma implementation own every query; handlers depend
   on the interface only. Every query is scoped by `orgId` (issuer + Workspace id).
 - `src/auth.ts` verifies tokens against the issuer named in `SHIP_TRUSTED_ISSUERS`; `src/semver.ts` is the
@@ -37,12 +41,15 @@ Ship is a CoForge App (README.md): Hono on Bun, Prisma and PostgreSQL, JSON over
   tests after the code, and do not weaken a test to make it pass.
 - Prefer end-to-end tests. `test/e2e.test.ts` boots the real server process against a real database, drives it
   over HTTP and writes a repeatable transcript to `artifacts/e2e/release-notes.json` (git-ignored).
-- Tests that need PostgreSQL use `test/support/postgres.ts`: a disposable `postgres:17-alpine` container on a
-  random loopback port, migrated with `prisma migrate deploy`, removed in `afterAll`. Never connect a test
-  (or a script) to any other database, container or compose stack.
+- Tests that need PostgreSQL call `createTestDatabase()` from `test/support/postgres.ts`: one disposable
+  `postgres:17-alpine` container per `bun test` run on a random loopback port, migrated once into a template
+  database, a database per file (drop it in `afterAll`). `bunfig.toml` preloads `global-teardown.ts`, which removes
+  the container after the last file. Never connect a test (or a script) to any other database, container or
+  compose stack.
 - `test/support/issuers.ts` makes fake CoForge issuers and signs tokens with local keys. Do not skip token
   verification, even temporarily.
-- Whatever a test starts (containers, servers, temp dirs) it stops in its own teardown.
+- Whatever a test starts (servers, temp dirs, its database) it stops in its own teardown; the shared container
+  is the one exception, removed by the global teardown.
 
 ## Secrets and trust
 

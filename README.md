@@ -103,9 +103,9 @@ mise run build     # bun build ./src/server.ts --target bun --outdir dist
 bun run start      # needs .env and a migrated database: bun run db:migrate:deploy
 ```
 
-The tests start their own disposable PostgreSQL (`postgres:17-alpine`, a random loopback port), apply
-`prisma/migrations` with `prisma migrate deploy`, and remove the container afterwards. They never use another
-database. `test/e2e.test.ts` boots the real server against it with two fake issuers and writes the transcript
+A `bun test` run starts one disposable PostgreSQL (`postgres:17-alpine`, a random loopback port), applies
+`prisma/migrations` with `prisma migrate deploy` to a template database, gives each test file its own copy, and
+removes the container after the last file. Tests never use another database. `test/e2e.test.ts` boots the real server against it with two fake issuers and writes the transcript
 `artifacts/e2e/release-notes.json` (git-ignored).
 
 `test/fixtures/coforge-agent-manifest.v1.schema.json` is a vendored copy of CoForge's published JSON Schema;
