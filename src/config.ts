@@ -47,11 +47,20 @@ function parseTrustedIssuers(raw: string): TrustedIssuer[] {
     if (typeof clientId !== "string" || !clientId.trim()) {
       throw new Error(`${at}.clientId must be a non-empty string`);
     }
-    if (issuer.endsWith("/")) throw new Error(`${at}.issuer must not end with a slash`);
-    requireSecureUrl(`${at}.issuer`, issuer);
-    if (seen.has(issuer)) throw new Error(`${name} lists the issuer ${issuer} twice`);
-    seen.add(issuer);
-    return { issuer, clientId: clientId.trim() };
+    const trimmed = issuer.trim();
+    if (trimmed.endsWith("/")) throw new Error(`${at}.issuer must not end with a slash`);
+    const url = requireSecureUrl(`${at}.issuer`, trimmed);
+    // A token's `iss` is compared as a string, so the issuer must be written the way a URL
+    // serializes (lower-case host, no default port, no dot segments); an origin without a path
+    // serializes with a slash that the issuer, by the rule above, does not have.
+    if ((url.href !== trimmed && url.href !== `${trimmed}/`) || url.search || url.hash) {
+      throw new Error(
+        `${at}.issuer must be a plain URL without a query or fragment, written as ${url.href.replace(/\/$/, "")}`,
+      );
+    }
+    if (seen.has(trimmed)) throw new Error(`${name} lists the issuer ${trimmed} twice`);
+    seen.add(trimmed);
+    return { issuer: trimmed, clientId: clientId.trim() };
   });
 }
 
@@ -64,12 +73,14 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   const trustedIssuers = parseTrustedIssuers(need("SHIP_TRUSTED_ISSUERS"));
   const appOrigin = need("APP_ORIGIN");
   const databaseUrl = need("DATABASE_URL");
-  if (requireSecureUrl("APP_ORIGIN", appOrigin).pathname !== "/") {
-    throw new Error("APP_ORIGIN must be an origin, without a path");
+  const origin = requireSecureUrl("APP_ORIGIN", appOrigin);
+  if (origin.pathname !== "/" || /[?#]/.test(appOrigin) || origin.username || origin.password) {
+    throw new Error("APP_ORIGIN must be an origin: no path, query, fragment or credentials");
   }
   return {
     trustedIssuers,
-    appOrigin,
+    // The origin, not the text: a trailing slash would double up in the URLs built from it.
+    appOrigin: origin.origin,
     port: Number(env.PORT || 3000),
     host: env.HOST?.trim() || "0.0.0.0",
     databaseUrl,
