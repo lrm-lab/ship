@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { Hono } from "hono";
 import { createApp } from "#src/app";
+import { publicReleaseUrl } from "#src/public-routes";
 import { loadConfig } from "#src/config";
 import { createDatabase, type Database } from "#src/store/database";
 import { createPrismaReleaseStore } from "#src/store/prisma-release-store";
@@ -92,9 +93,7 @@ describe("releases.notes.put and releases.notes.get", () => {
       await putNotes("where", "1.0.0+build.5", { en: "x" }, { workspace: "w-where" })
     ).json();
     expect(put.orgId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$/);
-    expect(put.publicUrl).toBe(
-      `${BASE}/public/v1/orgs/${put.orgId}/apps/where/releases/${encodeURIComponent("1.0.0+build.5")}`,
-    );
+    expect(put.publicUrl).toBe(publicReleaseUrl(BASE, put.orgId, "where", "1.0.0+build.5"));
     const got = await (await getNotes("where", "1.0.0+build.5", { workspace: "w-where" })).json();
     expect(got.orgId).toBe(put.orgId);
     expect(got.publicUrl).toBe(put.publicUrl);
@@ -349,22 +348,19 @@ describe("releases.list", () => {
 });
 
 describe("public read: GET /public/v1/orgs/{orgId}/apps/{app}/releases/{version}", () => {
-  /** The org id a Workspace got, found through the store the app uses. */
-  const orgIdOf = (issuer: TestIssuer, workspaceId: string) =>
-    createPrismaReleaseStore(database.client).ensureOrg({ issuer: issuer.issuer, workspaceId });
+  const who = { workspace: "w-pub" };
+  /** Publishes as the Workspace and returns the org id the response names. */
+  const publish = async (
+    appName: string,
+    version: string,
+    notes: Record<string, string>,
+    as: Who = who,
+  ) => (await (await putNotes(appName, version, notes, as)).json()).orgId as string;
   const publicGet = (orgId: string, appName: string, version: string) =>
-    app.request(
-      `${BASE}/public/v1/orgs/${orgId}/apps/${appName}/releases/${encodeURIComponent(version)}`,
-    );
+    app.request(publicReleaseUrl(BASE, orgId, appName, version));
 
   test("serves the notes without a token, with cache-control: no-cache", async () => {
-    await putNotes(
-      "public-demo",
-      "2.1.0-dev.3",
-      { en: "Hello", "zh-CN": "你好" },
-      { workspace: "w-pub" },
-    );
-    const orgId = await orgIdOf(issuerA, "w-pub");
+    const orgId = await publish("public-demo", "2.1.0-dev.3", { en: "Hello", "zh-CN": "你好" });
     const res = await publicGet(orgId, "public-demo", "2.1.0-dev.3");
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("no-cache");
@@ -378,23 +374,26 @@ describe("public read: GET /public/v1/orgs/{orgId}/apps/{app}/releases/{version}
   });
 
   test("shows the same body as releases.notes.get and follows an overwrite", async () => {
-    await putNotes("public-same", "1.0.0", { en: "a", fr: "b" }, { workspace: "w-pub" });
-    const orgId = await orgIdOf(issuerA, "w-pub");
-    const viaAction = await (await getNotes("public-same", "1.0.0", { workspace: "w-pub" })).json();
+    const orgId = await publish("public-same", "1.0.0", { en: "a", fr: "b" });
+    const viaAction = await (await getNotes("public-same", "1.0.0", who)).json();
     const { orgId: actionOrgId, publicUrl, ...rest } = viaAction;
     expect(actionOrgId).toBe(orgId);
-    expect(publicUrl).toContain(`/public/v1/orgs/${orgId}/`);
+    expect(publicUrl).toBe(publicReleaseUrl(BASE, orgId, "public-same", "1.0.0"));
     expect(await (await publicGet(orgId, "public-same", "1.0.0")).json()).toEqual(rest);
-    await putNotes("public-same", "1.0.0", { en: "c" }, { workspace: "w-pub" });
+    await putNotes("public-same", "1.0.0", { en: "c" }, who);
     expect((await (await publicGet(orgId, "public-same", "1.0.0")).json()).notes).toEqual({
       en: "c",
     });
   });
 
-  test("404 not_found for an unknown release, another org's id, or any malformed part", async () => {
-    await putNotes("public-404", "1.0.0", { en: "x" }, { workspace: "w-pub" });
-    const orgId = await orgIdOf(issuerA, "w-pub");
-    const otherOrg = await orgIdOf(issuerB, "w-pub");
+  test("404 not_found, one body, for an unknown release, another org's id, or any malformed part", async () => {
+    const orgId = await publish("public-404", "1.0.0", { en: "x" });
+    const otherOrg = await publish(
+      "elsewhere",
+      "1.0.0",
+      { en: "y" },
+      { issuer: issuerB, workspace: "w-pub" },
+    );
     const urls = [
       [orgId, "public-404", "9.9.9"],
       [orgId, "no-such-app", "1.0.0"],
@@ -405,9 +404,17 @@ describe("public read: GET /public/v1/orgs/{orgId}/apps/{app}/releases/{version}
       [orgId, "public-404", "1.0"],
       [orgId, "public-404", "v1.0.0"],
     ] as const;
+    const responses = await Promise.all(urls.map(([o, a, v]) => publicGet(o, a, v)));
+    // paths that do not match the route at all, and other methods, answer the same
+    const unmatched = [
+      app.request(`${BASE}/public/v1/orgs/${orgId}/apps/public-404/releases`),
+      app.request(`${BASE}/public/v1/orgs/${orgId}`),
+      app.request(`${BASE}/public/nothing`),
+      app.request(publicReleaseUrl(BASE, orgId, "public-404", "1.0.0"), { method: "DELETE" }),
+    ];
+    responses.push(...(await Promise.all(unmatched)));
     const bodies = [];
-    for (const [o, a, v] of urls) {
-      const res = await publicGet(o, a, v);
+    for (const res of responses) {
       expect(res.status).toBe(404);
       expect(res.headers.get("cache-control")).toBe("no-cache");
       bodies.push(await res.json());
@@ -422,11 +429,10 @@ describe("public read: GET /public/v1/orgs/{orgId}/apps/{app}/releases/{version}
       await app.request(`${BASE}/.well-known/coforge-agent-manifest.json`)
     ).json();
     expect(JSON.stringify(manifest)).not.toContain("/public/");
-    const orgId = await orgIdOf(issuerA, "w-pub");
-    const res = await app.request(
-      `${BASE}/public/v1/orgs/${orgId}/apps/public-same/releases/1.0.0`,
-      { headers: { authorization: "Bearer garbage" } },
-    );
+    const orgId = await publish("public-auth", "1.0.0", { en: "x" });
+    const res = await app.request(publicReleaseUrl(BASE, orgId, "public-auth", "1.0.0"), {
+      headers: { authorization: "Bearer garbage" },
+    });
     expect(res.status).toBe(200);
   });
 });

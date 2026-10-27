@@ -1,4 +1,4 @@
-import type { Hono } from "hono";
+import type { Context, Hono } from "hono";
 import { APP_SCHEMA, VERSION_SCHEMA } from "./manifest";
 import { releaseBody } from "./releases";
 import type { ReleaseStore } from "./store/release-store";
@@ -33,12 +33,15 @@ export const publicReleaseUrl = (
 /**
  * The public, token-less read of one release's notes, for CoForge Web's "What's new". It is not
  * an action of the manifest. The org id is an unguessable id, not a credential: anyone who knows
- * it can read what that org published. A malformed id, app or version answers the same 404 as a
- * release that does not exist, so the response never says which part was wrong.
+ * it can read what that org published. A malformed id, app or version, or any other path under
+ * /public, answers the same 404 as a release that does not exist, so the response never says what was wrong.
  */
 export function registerPublicRoutes(app: Hono, store: ReleaseStore) {
-  app.get(PUBLIC_RELEASE_PATH, async (c) => {
+  const notFound = (c: Context) => {
     c.header("Cache-Control", "no-cache");
+    return c.json({ error: "not_found", message: "No such release" }, 404);
+  };
+  app.get(PUBLIC_RELEASE_PATH, async (c) => {
     const params = c.req.param();
     const release =
       validate(PARAMS_SCHEMA, params).length === 0
@@ -48,7 +51,11 @@ export function registerPublicRoutes(app: Hono, store: ReleaseStore) {
             params.version as string,
           )
         : null;
-    if (!release) return c.json({ error: "not_found", message: "No such release" }, 404);
+    if (!release) return notFound(c);
+    c.header("Cache-Control", "no-cache");
     return c.json(releaseBody(release));
   });
+  // Any other path or method under /public answers the same 404, so nothing there tells a
+  // malformed request from a missing release.
+  app.all("/public/*", notFound);
 }
