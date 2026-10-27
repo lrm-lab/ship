@@ -10,14 +10,17 @@ function toNotes(rows: { locale: string; body: string }[]): ReleaseNotes {
 export function createPrismaReleaseStore(db: PrismaClient): ReleaseStore {
   return {
     async ensureOrg({ issuer, workspaceId }) {
-      // An update that changes nothing makes the upsert one atomic statement, race-free.
-      const org = await db.org.upsert({
-        where: { issuer_workspaceId: { issuer, workspaceId } },
-        create: { issuer, workspaceId },
-        update: { issuer },
-        select: { id: true },
-      });
-      return org.id;
+      const where = { issuer_workspaceId: { issuer, workspaceId } };
+      // Read first: almost every call finds the org, and a read writes nothing.
+      const existing = await db.org.findUnique({ where, select: { id: true } });
+      if (existing) return existing.id;
+      try {
+        return (await db.org.create({ data: { issuer, workspaceId }, select: { id: true } })).id;
+      } catch (error) {
+        // Another first call created it between our read and our insert (unique violation).
+        if ((error as { code?: string }).code !== "P2002") throw error;
+        return (await db.org.findUniqueOrThrow({ where, select: { id: true } })).id;
+      }
     },
 
     putNotes({ orgId, app, version, channel, agentId, notes }) {

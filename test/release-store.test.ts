@@ -47,6 +47,16 @@ describe("orgs", () => {
     expect(new Set([a, b, other]).size).toBe(3);
   });
 
+  test("a later call for an existing org does not write to it", async () => {
+    const key = { issuer: "https://a.example/oidc", workspaceId: "w-readonly" };
+    const orgId = await store.ensureOrg(key);
+    const before = await database.client.org.findUniqueOrThrow({ where: { id: orgId } });
+    await Bun.sleep(20);
+    for (let i = 0; i < 3; i++) expect(await store.ensureOrg(key)).toBe(orgId);
+    const after = await database.client.org.findUniqueOrThrow({ where: { id: orgId } });
+    expect(after.updatedAt.getTime()).toBe(before.updatedAt.getTime());
+  });
+
   test("concurrent first calls from one Workspace create one org", async () => {
     const ids = await Promise.all(
       Array.from({ length: 8 }, () =>
