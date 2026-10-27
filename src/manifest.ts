@@ -8,10 +8,30 @@
  * Agents read this document; keep descriptions plain and factual.
  */
 
+import type { Config } from "./config";
+import type { Schema } from "./validate";
+
+type ActionBase = {
+  name: string;
+  description?: string;
+  effect: "read" | "create" | "update" | "delete" | "external_side_effect";
+  endpoint: { method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"; path: string };
+  required_scopes: readonly string[];
+  input_schema: Schema;
+  output_schema?: Schema;
+};
+
+/** `idempotency_header` exists exactly when the action is `key_required`. */
+export type Action = ActionBase &
+  (
+    | { idempotency: "key_required"; idempotency_header: string }
+    | { idempotency: "safe" | "idempotent" | "non_idempotent"; idempotency_header?: undefined }
+  );
+
 export const MANIFEST_PATH = "/.well-known/coforge-agent-manifest.json";
 export const API_PREFIX = "/api";
 
-export const actions = [
+export const actions: Action[] = [
   {
     name: "notes.get",
     description: "Read one note by id.",
@@ -58,8 +78,7 @@ export const actions = [
   },
 ];
 
-/** @param {import("./config.js").Config} config */
-export function buildManifest(config) {
+export function buildManifest(config: Pick<Config, "appOrigin">) {
   return {
     schema: "coforge-agent-manifest.v1",
     name: "ship",

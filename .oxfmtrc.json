@@ -1,0 +1,8 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "ignorePatterns": [
+    "test/fixtures/coforge-agent-manifest.v1.schema.json",
+    "bun.lock",
+    "prisma/migrations/**"
+  ]
+}

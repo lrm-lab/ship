@@ -1,0 +1,24 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "rules": {
+    "no-restricted-imports": [
+      "error",
+      {
+        "paths": [
+          {
+            "name": "node:child_process",
+            "message": "Use Bun.spawn or Bun.spawnSync in Bun packages."
+          },
+          { "name": "node:dgram", "message": "Use Bun.udpSocket in Bun packages." },
+          { "name": "node:http", "message": "Use fetch or Bun.serve in Bun packages." },
+          { "name": "node:https", "message": "Use fetch or Bun.serve in Bun packages." },
+          { "name": "node:net", "message": "Use Bun.listen or Bun.connect in Bun packages." },
+          {
+            "name": "node:tls",
+            "message": "Use fetch, WebSocket, or Bun TLS support in Bun packages."
+          }
+        ]
+      }
+    ]
+  }
+}

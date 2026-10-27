@@ -3,19 +3,30 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22" },
+  "imports": {
+    "#src/*": "./src/*.ts"
+  },
   "scripts": {
-    "start": "node --env-file=.env src/server.js",
-    "dev": "node --watch --env-file=.env src/server.js",
-    "test": "node --test test/*.test.js"
+    "start": "bun src/server.ts",
+    "dev": "bun --watch src/server.ts",
+    "test": "bun test",
+    "format": "oxfmt .",
+    "format:check": "oxfmt --check .",
+    "lint": "oxlint .",
+    "typecheck": "tsc --noEmit",
+    "check": "bun run format:check && bun run lint && bun run typecheck",
+    "build": "bun build ./src/server.ts --target bun --outdir dist"
   },
   "dependencies": {
-    "@hono/node-server": "2.1.5",
-    "hono": "4.13.13",
+    "hono": "4.13.14",
     "jose": "6.2.13"
   },
   "devDependencies": {
+    "@types/bun": "1.4.0",
     "ajv": "8.20.0",
-    "ajv-formats": "3.0.1"
+    "ajv-formats": "3.0.1",
+    "oxfmt": "0.65.0",
+    "oxlint": "1.80.0",
+    "typescript": "7.0.2"
   }
 }

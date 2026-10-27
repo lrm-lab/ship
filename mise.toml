@@ -1,0 +1,14 @@
+[tools]
+bun = "1.4.4"
+
+[tasks.test]
+description = "Run the tests"
+run = "bun run test"
+
+[tasks.check]
+description = "Check formatting, lint and types"
+run = "bun run check"
+
+[tasks.build]
+description = "Bundle the server into dist/"
+run = "bun run build"

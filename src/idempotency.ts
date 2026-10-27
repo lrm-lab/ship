@@ -1,15 +1,25 @@
 import { createHash } from "node:crypto";
 
+export type StoredResponse = { status: number; body: unknown };
+type Begin =
+  | { state: "new" }
+  | { state: "replay"; response: StoredResponse }
+  | { state: "in_flight" }
+  | { state: "conflict" };
+
 const TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_ENTRIES = 10_000;
 
 /** Stable fingerprint of a request's input, independent of property order. */
-const fingerprint = (input) => createHash("sha256").update(canonical(input)).digest("hex");
-const canonical = (v) =>
+const fingerprint = (input: unknown) => createHash("sha256").update(canonical(input)).digest("hex");
+const canonical = (v: unknown): string =>
   Array.isArray(v)
     ? `[${v.map(canonical).join(",")}]`
     : v && typeof v === "object"
-      ? `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canonical(v[k])}`).join(",")}}`
+      ? `{${Object.keys(v)
+          .sort()
+          .map((k) => `${JSON.stringify(k)}:${canonical((v as Record<string, unknown>)[k])}`)
+          .join(",")}}`
       : JSON.stringify(v);
 
 /**
@@ -21,27 +31,35 @@ const canonical = (v) =>
  * different input is a "conflict". The key is scoped by the caller (Workspace, Agent, action).
  * In memory: back it with a database or Redis before running several instances.
  */
-export function createIdempotencyStore(now = Date.now) {
-  const entries = new Map();
-  const id = (scope, key) => `${scope}\n${key}`;
+export function createIdempotencyStore(now: () => number = Date.now) {
+  const entries = new Map<
+    string,
+    { fingerprint: string; response: StoredResponse | undefined; expiresAt: number }
+  >();
+  const id = (scope: string, key: string) => `${scope}\n${key}`;
   return {
-    /** @returns {{ state: "new" } | { state: "replay", response: { status: number, body: unknown } } | { state: "in_flight" } | { state: "conflict" }} */
-    begin(scope, key, input) {
+    begin(scope: string, key: string, input: unknown): Begin {
       const entry = entries.get(id(scope, key));
       const print = fingerprint(input);
       if (entry && entry.expiresAt >= now()) {
         if (entry.fingerprint !== print) return { state: "conflict" };
-        return entry.response ? { state: "replay", response: entry.response } : { state: "in_flight" };
+        return entry.response
+          ? { state: "replay", response: entry.response }
+          : { state: "in_flight" };
       }
-      if (entries.size >= MAX_ENTRIES) entries.delete(entries.keys().next().value);
-      entries.set(id(scope, key), { fingerprint: print, response: undefined, expiresAt: now() + TTL_MS });
+      if (entries.size >= MAX_ENTRIES) entries.delete(entries.keys().next().value as string);
+      entries.set(id(scope, key), {
+        fingerprint: print,
+        response: undefined,
+        expiresAt: now() + TTL_MS,
+      });
       return { state: "new" };
     },
-    complete(scope, key, response) {
+    complete(scope: string, key: string, response: StoredResponse) {
       const entry = entries.get(id(scope, key));
       if (entry) entry.response = response;
     },
-    release(scope, key) {
+    release(scope: string, key: string) {
       entries.delete(id(scope, key));
     },
   };
