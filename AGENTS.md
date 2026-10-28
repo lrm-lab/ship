@@ -18,10 +18,12 @@ Ship is a CoForge App (README.md): Hono on Bun, Prisma and PostgreSQL, JSON over
 
 ## Image and CI
 
-- Pin every external reference: the `Dockerfile` base image by tag and digest, workflow actions by commit SHA
-  (version in a comment), mise by version. Keep CI to test, check, build and the image smoke test
-  (`scripts/smoke-image.sh`); nothing is pushed or published from it.
-- Migrations run as a one-shot `bunx --bun prisma migrate deploy` from the same image, before the server starts.
+- Pin every external reference: the `Dockerfile` base image and the PostgreSQL image
+  (`test/support/postgres-image.txt`, read by the tests and `scripts/smoke-image.sh`) by tag and digest,
+  workflow actions by commit SHA (version in a comment), mise by version. Keep CI to test, check, build and the
+  image smoke test; nothing is pushed or published from it.
+- Two image targets: the default server image carries `dist/` only (no `node_modules`); `--target migrate`
+  carries the Prisma CLI and runs `bunx --bun prisma migrate deploy` as a one-shot before the server starts.
   Workflows are linted by `actionlint` inside `mise run check`.
 
 ## Code layout
@@ -51,7 +53,7 @@ Ship is a CoForge App (README.md): Hono on Bun, Prisma and PostgreSQL, JSON over
 - Prefer end-to-end tests. `test/e2e.test.ts` boots the real server process against a real database, drives it
   over HTTP and writes a repeatable transcript to `artifacts/e2e/release-notes.json` (git-ignored).
 - Tests that need PostgreSQL call `createTestDatabase()` from `test/support/postgres.ts`: one disposable
-  `postgres:17-alpine` container per `bun test` run on a random loopback port, migrated once into a template
+  PostgreSQL container per `bun test` run on a random loopback port, migrated once into a template
   database, a database per file (drop it in `afterAll`). `bunfig.toml` preloads `global-teardown.ts`, which removes
   the container after the last file. Never connect a test (or a script) to any other database, container or
   compose stack.

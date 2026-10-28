@@ -92,26 +92,32 @@ coforge app invoke <app-key> releases.list --param app=coforge-computer --param 
 
 ## Container image
 
-The `Dockerfile` builds the server into `dist/server.js` on the official `oven/bun` Alpine image and ships it
-with the Prisma CLI, the schema and the migrations. It runs as the non-root `bun` user and listens on 3000.
+The `Dockerfile` has two targets on the official `oven/bun` Alpine image, both running as the non-root `bun` user:
+
+- the default target is the server alone: `dist/server.js` (it bundles its dependencies, so no `node_modules`),
+  listening on 3000;
+- `--target migrate` is the one-shot migration job: the Prisma CLI, the schema and the migrations, whose default
+  command is `bunx --bun prisma migrate deploy`.
 
 ```bash
 docker build --tag ship .
-# Apply the migrations: a one-shot run of the same image, before the first start and after every upgrade.
-docker run --rm --env DATABASE_URL ship bunx --bun prisma migrate deploy
+docker build --target migrate --tag ship-migrate .
+# Apply the migrations before the first start and after every upgrade.
+docker run --rm --env DATABASE_URL ship-migrate
 docker run -d --publish 3000:3000 --env DATABASE_URL --env APP_ORIGIN --env SHIP_TRUSTED_ISSUERS ship
 ```
 
-The container needs `DATABASE_URL`, `APP_ORIGIN` and `SHIP_TRUSTED_ISSUERS` (see Environment variables);
-`HOST` defaults to `0.0.0.0` and `PORT` to 3000. `GET /healthz` is the liveness probe and `SIGTERM` stops it
-gracefully. `scripts/smoke-image.sh <image>` migrates, starts and probes an image against a disposable
-PostgreSQL.
+A deployment runs the migrate image as a one-shot before it starts or replaces the server, like CoForge's
+`migrate` service. The server needs `DATABASE_URL`, `APP_ORIGIN` and `SHIP_TRUSTED_ISSUERS` (see Environment
+variables); `HOST` is `0.0.0.0` in the image and `PORT` defaults to 3000. `GET /healthz` is the liveness probe
+and `SIGTERM` stops it gracefully. `scripts/smoke-image.sh <server-image> <migrate-image>` migrates, starts and
+probes the two images against a disposable PostgreSQL.
 
 ## CI
 
 `.github/workflows/ci.yml` runs on pull requests and on pushes to `main`. The `verify` job runs
 `bun install --frozen-lockfile`, `mise run test`, `mise run check` (which includes `actionlint` on the
-workflows) and `mise run build`; the `image` job builds the image and runs the smoke test. Nothing is pushed
+workflows) and `mise run build`; the `image` job builds both targets and runs the smoke test. Nothing is pushed
 or published.
 
 ## Develop and test
@@ -127,7 +133,7 @@ mise run build     # bun build ./src/server.ts --target bun --outdir dist
 bun run start      # needs .env and a migrated database: bun run db:migrate:deploy
 ```
 
-A `bun test` run starts one disposable PostgreSQL (`postgres:17-alpine`, a random loopback port), applies
+A `bun test` run starts one disposable PostgreSQL (`test/support/postgres-image.txt`, a random loopback port), applies
 `prisma/migrations` with `prisma migrate deploy` to a template database, gives each test file its own copy, and
 removes the container after the last file. Tests never use another database. `test/e2e.test.ts` boots the real server against it with two fake issuers and writes the transcript
 `artifacts/e2e/release-notes.json` (git-ignored).
