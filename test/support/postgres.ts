@@ -7,7 +7,8 @@ export type TestDatabase = {
   drop(): Promise<void>;
 };
 
-const IMAGE = "postgres:17-alpine";
+// The image reference (tag and digest) lives in one file, shared with scripts/smoke-image.sh.
+const IMAGE = (await Bun.file(new URL("./postgres-image.txt", import.meta.url)).text()).trim();
 const TEMPLATE = "ship_template";
 const root = new URL("../..", import.meta.url).pathname;
 
